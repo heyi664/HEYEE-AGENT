@@ -1,0 +1,272 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HYEEE AI助手</title>
+  <link rel="stylesheet" href="./css/element.css">
+  <link href="./css/main.css" rel="stylesheet">
+  <link href="./css/chat.css" rel="stylesheet">
+</head>
+<body>
+<div id="app">
+  <div class="chat-page">
+    <aside class="chat-sidebar">
+      <div class="brand-block">
+        <div class="brand-mark">H</div>
+        <div>
+          <div class="brand-title">HYEEE AI助手</div>
+          <div class="brand-subtitle">本地生活智能客服</div>
+        </div>
+      </div>
+
+      <button class="new-chat-btn" @click="startNewChat">
+        <i class="el-icon-edit-outline"></i>
+        <span>开启新会话</span>
+      </button>
+
+      <div class="side-section">
+        <div class="side-title">当前会话</div>
+        <div class="session-card active">
+          <div class="session-name">{{conversationName}}</div>
+          <div class="session-meta">{{userMessageCount}} 条问题 · {{assistantMessageCount}} 条回复</div>
+        </div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-title">常用场景</div>
+        <button class="scene-btn" v-for="item in quickPrompts" :key="item" @click="usePrompt(item)">
+          <i class="el-icon-chat-line-round"></i>
+          <span>{{item}}</span>
+        </button>
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="plain-btn" @click="goHome"><i class="el-icon-s-home"></i>返回首页</button>
+        <button class="plain-btn danger" @click="clearChat"><i class="el-icon-delete"></i>清空记录</button>
+      </div>
+    </aside>
+
+    <main class="chat-main">
+      <header class="chat-header">
+        <div>
+          <div class="header-title">AI 聊天工作台</div>
+          <div class="header-subtitle">咨询店铺、优惠券、探店文案和本地生活建议</div>
+        </div>
+        <div class="header-actions">
+          <div class="status-pill">
+            <span class="status-dot"></span>
+            {{loading ? "回复生成中" : "在线"}}
+          </div>
+          <button class="header-btn" @click="clearChat"><i class="el-icon-delete"></i>清空</button>
+        </div>
+      </header>
+
+      <section class="chat-body" ref="chatBody">
+        <div class="welcome-panel" v-if="messages.length === 0">
+          <div class="welcome-copy">
+            <div class="welcome-kicker">AI Customer Service</div>
+            <div class="welcome-title">今天想让 HYEEE AI 帮你处理什么？</div>
+            <div class="welcome-text">可以直接询问本地美食推荐、优惠券使用建议、探店内容灵感，也可以让它帮你整理用户评论思路。</div>
+          </div>
+          <div class="welcome-prompts">
+            <button v-for="item in quickPrompts" :key="item" @click="usePrompt(item)">
+              <span>{{item}}</span>
+              <i class="el-icon-right"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="message-row" v-for="(m, index) in messages" :key="index" :class="m.role">
+          <div class="avatar" v-if="m.role === 'assistant'">AI</div>
+          <div class="message-bubble">
+            <div class="message-author">{{m.role === "user" ? "我" : "HYEEE AI"}}</div>
+            <div class="message-text">{{m.content}}</div>
+            <div class="message-time">{{m.time}}</div>
+          </div>
+          <div class="avatar user-avatar" v-if="m.role === 'user'"><i class="el-icon-user"></i></div>
+        </div>
+
+        <div class="message-row assistant" v-if="loading">
+          <div class="avatar">AI</div>
+          <div class="message-bubble typing">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+      </section>
+
+      <footer class="chat-input-panel">
+        <div class="input-tip">Enter 发送，Shift + Enter 换行</div>
+        <div class="chat-input-bar">
+          <el-input
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 5 }"
+            resize="none"
+            placeholder="输入你想问 HYEEE AI 的问题"
+            v-model="inputText"
+            @keydown.native="handleKeydown">
+          </el-input>
+          <button class="send-btn" :disabled="!canSend" @click="sendMessage">
+            <i class="el-icon-position"></i>
+            <span>发送</span>
+          </button>
+        </div>
+      </footer>
+    </main>
+
+    <aside class="insight-panel">
+      <div class="panel-card">
+        <div class="panel-title">建议问法</div>
+        <button class="suggestion-btn" v-for="item in sidePrompts" :key="item" @click="usePrompt(item)">{{item}}</button>
+      </div>
+      <div class="panel-card">
+        <div class="panel-title">会话状态</div>
+        <div class="stat-row"><span>会话编号</span><strong>{{conversationId || "未创建"}}</strong></div>
+        <div class="stat-row"><span>消息总数</span><strong>{{messages.length}}</strong></div>
+        <div class="stat-row"><span>接口地址</span><strong>/v1/agent/chat</strong></div>
+      </div>
+      <div class="panel-card muted">
+        <div class="panel-title">提示</div>
+        <p>这个页面现在按桌面浏览器设计，推荐在 1024px 以上窗口使用。</p>
+      </div>
+    </aside>
+  </div>
+</div>
+<script src="./js/vue.js"></script>
+<script src="./js/axios.min.js"></script>
+<script src="./js/element.js"></script>
+<script>
+  const STORAGE_KEY = "hyeee_ai_chat_messages";
+  axios.defaults.timeout = 30000;
+
+  const app = new Vue({
+    el: "#app",
+    data: {
+      inputText: "",
+      loading: false,
+      conversationId: sessionStorage.getItem("hyeee_ai_conversation_id") || "",
+      messages: [],
+      quickPrompts: [
+        "帮我推荐一家适合周末聚餐的店",
+        "写一段有氛围感的探店文案",
+        "怎么挑选附近高性价比商户？"
+      ],
+      sidePrompts: [
+        "附近有没有适合两个人约会的餐厅？",
+        "帮我把这条评论改得更自然一点",
+        "优惠券快过期了应该怎么选店？",
+        "根据用户评价总结一家店的亮点"
+      ]
+    },
+    computed: {
+      canSend() {
+        return this.inputText.trim().length > 0 && !this.loading;
+      },
+      userMessageCount() {
+        return this.messages.filter(m => m.role === "user").length;
+      },
+      assistantMessageCount() {
+        return this.messages.filter(m => m.role === "assistant").length;
+      },
+      conversationName() {
+        const firstUserMessage = this.messages.find(m => m.role === "user");
+        return firstUserMessage ? firstUserMessage.content.slice(0, 22) : "新的 AI 咨询";
+      }
+    },
+    created() {
+      const cache = sessionStorage.getItem(STORAGE_KEY);
+      if (cache) {
+        try {
+          this.messages = JSON.parse(cache) || [];
+        } catch (e) {
+          this.messages = [];
+        }
+      }
+      this.$nextTick(this.scrollToBottom);
+    },
+    methods: {
+      goHome() {
+        location.href = "/ui/chat.html";
+      },
+      startNewChat() {
+        this.messages = [];
+        this.conversationId = "";
+        this.inputText = "";
+        sessionStorage.removeItem(STORAGE_KEY);
+        sessionStorage.removeItem("hyeee_ai_conversation_id");
+      },
+      clearChat() {
+        this.$confirm("确定清空当前聊天记录吗？", "提示", {
+          confirmButtonText: "清空",
+          cancelButtonText: "取消",
+          type: "warning"
+        }).then(() => {
+          this.messages = [];
+          this.conversationId = "";
+          sessionStorage.removeItem(STORAGE_KEY);
+          sessionStorage.removeItem("hyeee_ai_conversation_id");
+        }).catch(() => {});
+      },
+      usePrompt(text) {
+        this.inputText = text;
+        this.sendMessage();
+      },
+      handleKeydown(e) {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          this.sendMessage();
+        }
+      },
+      sendMessage() {
+        const content = this.inputText.trim();
+        if (!content || this.loading) return;
+
+        this.messages.push({ role: "user", content, time: this.nowTime() });
+        this.inputText = "";
+        this.loading = true;
+        this.persistMessages();
+        this.$nextTick(this.scrollToBottom);
+
+        axios.post("/v1/agent/chat", {
+          userId: null,
+          conversationId: this.conversationId,
+          message: content,
+          history: this.messages.slice(-10).map(m => ({ role: m.role, content: m.content }))
+        }, { timeout: 30000 }).then(({data}) => {
+          const reply = data && data.reply ? data.reply : "我已经收到你的问题，但后端暂时没有返回回复内容。";
+          if (data && data.conversationId) {
+            this.conversationId = data.conversationId;
+            sessionStorage.setItem("hyeee_ai_conversation_id", this.conversationId);
+          }
+          this.messages.push({ role: "assistant", content: reply, time: this.nowTime() });
+          this.persistMessages();
+        }).catch(err => {
+          this.messages.push({
+            role: "assistant",
+            content: "AI 聊天接口暂时不可用，请确认 Python Agent 已启动并可访问 /v1/agent/chat。错误信息：" + err,
+            time: this.nowTime()
+          });
+          this.persistMessages();
+        }).finally(() => {
+          this.loading = false;
+          this.$nextTick(this.scrollToBottom);
+        });
+      },
+      nowTime() {
+        const d = new Date();
+        const h = String(d.getHours()).padStart(2, "0");
+        const m = String(d.getMinutes()).padStart(2, "0");
+        return h + ":" + m;
+      },
+      persistMessages() {
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(this.messages));
+      },
+      scrollToBottom() {
+        const el = this.$refs.chatBody;
+        if (el) el.scrollTop = el.scrollHeight;
+      }
+    }
+  })
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run HYEEE Agent",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "agent_service.main",
+      "console": "integratedTerminal",
+      "envFile": "${workspaceFolder}\\.env",
+      "justMyCode": true
+    }
+  ]
+}
+

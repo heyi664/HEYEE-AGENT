@@ -1,0 +1,1 @@
+"""MCP client contracts and tool adapters."""

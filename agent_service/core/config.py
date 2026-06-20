@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     agent_port: int = 8000
     agent_reload: bool = True
     agent_mock_mode: bool = True
+    agent_tool_mode: str = "auto"
 
     ai_provider: str = "openai"
     ai_api_key: str | None = None

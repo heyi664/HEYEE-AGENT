@@ -16,9 +16,12 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
         registry.register(
             ToolDefinition(
                 name="get_current_time",
-                description=(
-                    "Return the current server time. Action Input must be an empty JSON object."
-                ),
+                description="Return the current server time.",
                 handler=get_current_time,
+                input_schema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
             )
         )

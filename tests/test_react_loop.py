@@ -26,6 +26,7 @@ async def test_react_executes_tool_and_returns_final_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AGENT_MOCK_MODE", "false")
+    monkeypatch.setenv("AGENT_TOOL_MODE", "react")
     get_settings.cache_clear()
     registry = ToolRegistry()
 
@@ -58,6 +59,7 @@ async def test_react_accepts_direct_final_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AGENT_MOCK_MODE", "false")
+    monkeypatch.setenv("AGENT_TOOL_MODE", "react")
     get_settings.cache_clear()
     service = StubReActLLMService(
         ["Thought: No tool is needed.\nFinal Answer: 你好。"],

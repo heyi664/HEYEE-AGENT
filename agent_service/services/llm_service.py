@@ -10,6 +10,10 @@ import httpx
 
 from agent_service.core.config import get_settings
 from agent_service.core.errors import ModelUnavailableError
+from agent_service.services.function_call_service import (
+    FunctionCallingUnavailable,
+    FunctionCallService,
+)
 from agent_service.tools.builtin import register_builtin_tools
 from agent_service.tools.registry import ToolRegistry, tool_registry
 
@@ -38,6 +42,35 @@ class LLMService:
         self._registry = registry or tool_registry
 
     async def complete(self, messages: list[dict[str, str]]) -> LLMResult:
+        settings = get_settings()
+        if settings.agent_mock_mode:
+            return await self._complete_with_react(messages)
+
+        mode = settings.agent_tool_mode.lower()
+        if mode not in {"auto", "function_call", "react"}:
+            raise ModelUnavailableError(f"Unsupported AGENT_TOOL_MODE: {mode}")
+
+        if mode in {"auto", "function_call"}:
+            try:
+                result = await FunctionCallService(self._registry).complete(
+                    messages,
+                    settings.react_max_steps,
+                )
+                return LLMResult(result.reply, result.tool_calls)
+            except FunctionCallingUnavailable as exc:
+                if mode == "function_call":
+                    raise ModelUnavailableError(str(exc)) from exc
+                logger.info(
+                    "native function calling unavailable; falling back to ReAct: %s",
+                    exc,
+                )
+
+        return await self._complete_with_react(messages)
+
+    async def _complete_with_react(
+        self,
+        messages: list[dict[str, str]],
+    ) -> LLMResult:
         settings = get_settings()
         if settings.agent_mock_mode:
             user_message = messages[-1]["content"] if messages else ""

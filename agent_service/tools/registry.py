@@ -27,5 +27,8 @@ class ToolRegistry:
     def list_names(self) -> list[str]:
         return sorted(self._tools)
 
+    def list_tools(self) -> list[ToolDefinition]:
+        return [self._tools[name] for name in self.list_names()]
+
 
 tool_registry = ToolRegistry()

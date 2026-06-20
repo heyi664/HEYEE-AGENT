@@ -19,7 +19,7 @@ class ChatService:
         started_at = time.perf_counter()
         conversation_id = request.conversationId or f"conv_{uuid4().hex[:12]}"
         messages = build_messages(request.history, request.message)
-        reply = await self._llm_service.complete(messages)
+        result = await self._llm_service.complete(messages)
         elapsed_ms = int((time.perf_counter() - started_at) * 1000)
 
         logger.info(
@@ -30,12 +30,11 @@ class ChatService:
         )
         return ChatResponse(
             conversationId=conversation_id,
-            reply=reply,
+            reply=result.reply,
             sources=[],
-            toolCalls=[],
+            toolCalls=result.tool_calls,
         )
 
 
 def get_chat_service() -> ChatService:
     return ChatService(get_llm_service())
-

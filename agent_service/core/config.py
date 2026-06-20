@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     ai_base_url: str = "https://api.openai.com/v1"
     ai_model: str = "gpt-4o-mini"
     ai_timeout_seconds: float = Field(default=25.0, gt=0)
+    react_max_steps: int = Field(default=5, ge=1, le=10)
 
     java_service_url: str = "http://127.0.0.1:8081"
 

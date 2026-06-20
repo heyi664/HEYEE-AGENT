@@ -16,7 +16,7 @@ def _build_handler(client: McpClientProtocol, remote_name: str) -> ToolHandler:
 async def register_mcp_tools(
     client: McpClientProtocol,
     registry: ToolRegistry,
-    name_prefix: str = "java_",
+    name_prefix: str = "",
 ) -> list[str]:
     registered: list[str] = []
     for remote_tool in await client.list_tools():

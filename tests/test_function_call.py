@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from typing import Any
 
@@ -35,7 +36,10 @@ class StubFunctionCallService(FunctionCallService):
 
 
 @pytest.mark.asyncio
-async def test_function_call_executes_tool_and_returns_answer() -> None:
+async def test_function_call_executes_tool_and_returns_answer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
     registry = ToolRegistry()
 
     async def search_shop(arguments: dict[str, Any]) -> str:
@@ -91,3 +95,5 @@ async def test_function_call_executes_tool_and_returns_answer() -> None:
     assert function["name"] == "java_search_shop"
     assert function["parameters"]["required"] == ["keyword"]
     assert service.received_messages[1][-1]["role"] == "tool"
+    assert "LLM function call step=1 tool=java_search_shop" in caplog.text
+    assert '"keyword": "hotpot"' in caplog.text

@@ -74,10 +74,20 @@ class FunctionCallService:
 
             conversation.append(turn.assistant_message)
             for call in turn.tool_calls:
+                logger.info(
+                    "LLM function call step=%s tool=%s arguments=%s",
+                    step,
+                    call.name,
+                    json.dumps(call.arguments, ensure_ascii=False, sort_keys=True),
+                )
                 observation, summary = await self._execute(call)
                 summaries.append(summary)
                 conversation.append(self._observation_message(call, observation))
-                logger.info("function tool executed step=%s tool=%s", step, call.name)
+                logger.info(
+                    "LLM function call completed step=%s tool=%s",
+                    step,
+                    call.name,
+                )
 
         final_turn = await self._generate_turn(conversation, [])
         if not final_turn.content or not final_turn.content.strip():

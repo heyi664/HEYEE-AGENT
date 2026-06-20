@@ -96,6 +96,16 @@ class LLMService:
                 logger.info("react completed without protocol step=%s", step)
                 return LLMResult(reply=model_output.strip(), tool_calls=tool_calls)
 
+            logger.info(
+                "LLM ReAct tool call step=%s tool=%s arguments=%s",
+                step,
+                decision.action,
+                json.dumps(
+                    decision.action_input,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            )
             observation, call_summary = await self._execute_tool(
                 decision.action,
                 decision.action_input,

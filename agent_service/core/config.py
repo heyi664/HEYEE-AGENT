@@ -26,6 +26,13 @@ class Settings(BaseSettings):
 
     java_service_url: str = "http://127.0.0.1:8081"
 
+    mcp_enabled: bool = False
+    mcp_server_url: str = "http://127.0.0.1:8081/mcp"
+    mcp_server_token: str | None = None
+    mcp_timeout_seconds: float = Field(default=10.0, gt=0)
+    mcp_tool_prefix: str = ""
+    mcp_fail_fast: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

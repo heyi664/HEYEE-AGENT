@@ -38,8 +38,8 @@ async def test_mcp_tools_are_adapted_to_function_registry() -> None:
 
     registered = await register_mcp_tools(client, registry)
 
-    assert registered == ["java_search_shops"]
-    tool = registry.get("java_search_shops")
+    assert registered == ["search_shops"]
+    tool = registry.get("search_shops")
     assert tool is not None
     assert tool.to_function_schema()["function"]["parameters"]["required"] == ["keyword"]
 

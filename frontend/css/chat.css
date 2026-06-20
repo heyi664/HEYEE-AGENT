@@ -12,6 +12,7 @@ button {
 
 .chat-page {
     height: 100%;
+    min-height: 0;
     display: grid;
     grid-template-columns: 280px minmax(520px, 1fr) 320px;
     background: #eef1f6;
@@ -150,14 +151,18 @@ button {
 }
 
 .chat-main {
+    height: 100%;
     min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
     background: #f7f8fb;
 }
 
 .chat-header {
     height: 82px;
+    flex: 0 0 82px;
     padding: 0 28px;
     background: #fff;
     border-bottom: 1px solid #e8ebf0;
@@ -218,9 +223,13 @@ button {
 }
 
 .chat-body {
-    flex: 1;
+    flex: 1 1 auto;
+    min-height: 0;
     padding: 26px 32px;
+    overflow-x: hidden;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
     box-sizing: border-box;
 }
 
@@ -403,6 +412,7 @@ button {
 }
 
 .chat-input-panel {
+    flex: 0 0 auto;
     padding: 14px 28px 22px;
     background: #fff;
     border-top: 1px solid #e8ebf0;
@@ -533,4 +543,38 @@ button {
     .insight-panel {
         display: none;
     }
+}
+/* Chat viewport scroll containment */
+html,
+body,
+#app {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.chat-page {
+    height: 100vh;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+}
+
+.chat-main {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.chat-header,
+.chat-input-panel {
+    flex-shrink: 0;
+}
+
+.chat-body {
+    height: 0;
+    min-height: 0;
+    flex: 1 1 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }

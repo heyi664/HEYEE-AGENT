@@ -55,7 +55,9 @@ class FunctionCallService:
             policy = (
                 "\n\nUse the provided tools whenever the answer depends on current, "
                 "user-specific, shop, voucher, review, or other external business data. "
-                "Never guess or fabricate data that a tool can retrieve."
+                "After each tool result, reassess the remaining task and call any "
+                "additional tool needed before answering. Never guess or fabricate "
+                "data that a tool can retrieve."
             )
             if conversation and conversation[0].get("role") == "system":
                 conversation[0]["content"] = str(conversation[0].get("content", "")) + policy
@@ -65,6 +67,8 @@ class FunctionCallService:
                     {"role": "system", "content": policy.strip()},
                 )
 
+        # Every turn sees the updated observations and all schemas, so the model can
+        # select a different tool for the next part of a multi-step task.
         for step in range(1, max_steps + 1):
             turn = await self._generate_turn(conversation, schemas)
             if not turn.tool_calls:

@@ -368,6 +368,104 @@ button {
     word-break: break-word;
 }
 
+.markdown-body {
+    white-space: normal;
+}
+
+.markdown-body > :first-child {
+    margin-top: 0;
+}
+
+.markdown-body > :last-child {
+    margin-bottom: 0;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body pre,
+.markdown-body blockquote,
+.markdown-body table {
+    margin: 0 0 10px;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+    margin: 14px 0 8px;
+    line-height: 1.4;
+    font-size: 15px;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+    padding-left: 22px;
+}
+
+.markdown-body li + li {
+    margin-top: 3px;
+}
+
+.markdown-body code {
+    padding: 2px 5px;
+    border-radius: 4px;
+    background: #f1f3f5;
+    color: #c23b22;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 13px;
+}
+
+.markdown-body pre {
+    max-width: 100%;
+    overflow-x: auto;
+    padding: 11px 12px;
+    border: 1px solid #e5e8ed;
+    border-radius: 6px;
+    background: #f7f8fa;
+}
+
+.markdown-body pre code {
+    padding: 0;
+    background: transparent;
+    color: #252932;
+}
+
+.markdown-body blockquote {
+    padding-left: 12px;
+    border-left: 3px solid #ff6633;
+    color: #626975;
+}
+
+.markdown-body table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+}
+
+.markdown-body th,
+.markdown-body td {
+    padding: 6px 9px;
+    border: 1px solid #dfe3e8;
+    text-align: left;
+}
+
+.markdown-body th {
+    background: #f6f7f9;
+}
+
+.markdown-body a {
+    color: #d94c1f;
+    text-decoration: underline;
+}
+
+.markdown-body hr {
+    margin: 12px 0;
+    border: 0;
+    border-top: 1px solid #e1e4e8;
+}
+
 .message-time {
     margin-top: 6px;
     text-align: right;
@@ -378,7 +476,6 @@ button {
 .message-row.user .message-time {
     color: rgba(255, 255, 255, 0.72);
 }
-
 .typing {
     width: 70px;
     height: 40px;

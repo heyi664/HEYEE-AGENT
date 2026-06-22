@@ -81,7 +81,12 @@
           <div class="avatar" v-if="m.role === 'assistant'">AI</div>
           <div class="message-bubble">
             <div class="message-author">{{m.role === "user" ? "我" : "HYEEE AI"}}</div>
-            <div class="message-text">{{m.content}}</div>
+            <div class="message-text" v-if="m.role === 'user'">{{m.content}}</div>
+            <div
+              class="message-text markdown-body"
+              v-else
+              v-html="renderMarkdown(m.content)"
+            ></div>
             <div class="message-time">{{m.time}}</div>
           </div>
           <div class="avatar user-avatar" v-if="m.role === 'user'"><i class="el-icon-user"></i></div>
@@ -132,6 +137,8 @@
     </aside>
   </div>
 </div>
+<script src="./js/marked.umd.js"></script>
+<script src="./js/purify.min.js"></script>
 <script src="./js/vue.js"></script>
 <script src="./js/axios.min.js"></script>
 <script src="./js/element.js"></script>
@@ -250,6 +257,21 @@
         }).finally(() => {
           this.loading = false;
           this.$nextTick(this.scrollToBottom);
+        });
+      },
+      renderMarkdown(content) {
+        const source = String(content || "");
+        if (!window.marked || !window.DOMPurify) {
+          const fallback = document.createElement("div");
+          fallback.textContent = source;
+          return fallback.innerHTML.replace(/\n/g, "<br>");
+        }
+        const rendered = window.marked.parse(source, {
+          breaks: true,
+          gfm: true
+        });
+        return window.DOMPurify.sanitize(rendered, {
+          USE_PROFILES: { html: true }
         });
       },
       nowTime() {

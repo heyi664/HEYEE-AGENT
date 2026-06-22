@@ -38,3 +38,19 @@ def test_chat_layout_keeps_message_area_scrollable() -> None:
     assert "grid-template-rows: minmax(0, 1fr);" in css
     assert "height: 0;" in css
     assert "flex: 1 1 0;" in css
+
+def test_assistant_messages_use_sanitized_markdown_rendering() -> None:
+    client = TestClient(create_app())
+
+    page = client.get("/ui/chat.html")
+    marked = client.get("/ui/js/marked.umd.js")
+    purifier = client.get("/ui/js/purify.min.js")
+
+    assert page.status_code == 200
+    assert marked.status_code == 200
+    assert purifier.status_code == 200
+    assert 'v-html="renderMarkdown(m.content)"' in page.text
+    assert "window.marked.parse" in page.text
+    assert "window.DOMPurify.sanitize" in page.text
+    assert "fallback.innerHTML.replace(/\\n/g" in page.text
+    assert "m.role === 'user'" in page.text

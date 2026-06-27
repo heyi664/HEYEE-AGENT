@@ -40,7 +40,7 @@ class KnowledgeRepository:
             rows = conn.execute(
                 text(
                     """
-                    SELECT id, name
+                    SELECT id, name, collection_name
                     FROM t_knowledge_base
                     WHERE deleted = 0
                     ORDER BY name ASC
@@ -48,7 +48,11 @@ class KnowledgeRepository:
                 )
             ).mappings()
             return [
-                KnowledgeBaseSummary(id=str(row["id"]), name=str(row["name"]))
+                KnowledgeBaseSummary(
+                    id=str(row["id"]),
+                    name=str(row["name"]),
+                    collectionName=str(row["collection_name"]),
+                )
                 for row in rows
             ]
 
@@ -61,7 +65,7 @@ class KnowledgeRepository:
                 conn.execute(
                     text(
                         """
-                        SELECT id, name
+                        SELECT id, name, collection_name
                         FROM t_knowledge_base
                         WHERE name = :name AND deleted = 0
                         LIMIT 1
@@ -74,7 +78,11 @@ class KnowledgeRepository:
             )
         if row is None:
             return None
-        return KnowledgeBaseSummary(id=str(row["id"]), name=str(row["name"]))
+        return KnowledgeBaseSummary(
+                    id=str(row["id"]),
+                    name=str(row["name"]),
+                    collectionName=str(row["collection_name"]),
+                )
 
 
     def find_knowledge_base_by_collection_name(
@@ -89,7 +97,7 @@ class KnowledgeRepository:
                 conn.execute(
                     text(
                         """
-                        SELECT id, name
+                        SELECT id, name, collection_name
                         FROM t_knowledge_base
                         WHERE collection_name = :collection_name AND deleted = 0
                         LIMIT 1
@@ -102,7 +110,11 @@ class KnowledgeRepository:
             )
         if row is None:
             return None
-        return KnowledgeBaseSummary(id=str(row["id"]), name=str(row["name"]))
+        return KnowledgeBaseSummary(
+                    id=str(row["id"]),
+                    name=str(row["name"]),
+                    collectionName=str(row["collection_name"]),
+                )
 
     def insert_knowledge_base(self, record: KnowledgeBaseRecord) -> None:
         from sqlalchemy import text

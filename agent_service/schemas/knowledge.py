@@ -10,6 +10,7 @@ ALLOWED_CHUNK_STRATEGIES = {"fixed_size", "structure_aware"}
 class KnowledgeBaseSummary(BaseModel):
     id: str
     name: str
+    collectionName: str | None = None
 
 
 

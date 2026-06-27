@@ -23,21 +23,29 @@ class ObjectStorageService:
     async def upload_async_stream(
         self,
         *,
+        bucket_name: str,
         object_key: str,
         file_name: str,
         content_type: str | None,
         content: AsyncIterator[bytes],
+        content_length: int | None = None,
     ) -> StoredObject:
         settings = get_settings()
-        put_url = self._create_presigned_put_url(object_key, content_type)
+        put_url = self._create_presigned_put_url(bucket_name, object_key, content_type)
         counted = _CountingAsyncIterator(content, settings.upload_max_size_mb * 1024 * 1024)
         headers = {"Content-Type": content_type or "application/octet-stream"}
+        if content_length is not None:
+            headers["Content-Length"] = str(content_length)
         async with httpx.AsyncClient(timeout=None) as client:
             response = await client.put(put_url, content=counted, headers=headers)
-            response.raise_for_status()
+            if response.is_error:
+                raise RuntimeError(
+                    "RustFS upload failed "
+                    f"status={response.status_code} body={response.text[:500]}"
+                )
         return StoredObject(
             original_file_name=file_name,
-            file_url=self._build_file_url(object_key),
+            file_url=self._build_file_url(bucket_name, object_key),
             object_key=object_key,
             file_size=counted.bytes_read,
         )
@@ -46,6 +54,7 @@ class ObjectStorageService:
         self,
         *,
         path: Path,
+        bucket_name: str,
         object_key: str,
         file_name: str,
         content_type: str | None,
@@ -56,7 +65,7 @@ class ObjectStorageService:
         if file_size > max_size:
             raise ValueError(f"文件超过最大限制 {settings.upload_max_size_mb}MB")
 
-        put_url = self._create_presigned_put_url(object_key, content_type)
+        put_url = self._create_presigned_put_url(bucket_name, object_key, content_type)
         headers = {
             "Content-Type": content_type or "application/octet-stream",
             "Content-Length": str(file_size),
@@ -68,15 +77,39 @@ class ObjectStorageService:
                     content=_read_file_chunks(file_obj),
                     headers=headers,
                 )
-            response.raise_for_status()
+            if response.is_error:
+                raise RuntimeError(
+                    "RustFS upload failed "
+                    f"status={response.status_code} body={response.text[:500]}"
+                )
         return StoredObject(
             original_file_name=file_name,
-            file_url=self._build_file_url(object_key),
+            file_url=self._build_file_url(bucket_name, object_key),
             object_key=object_key,
             file_size=file_size,
         )
 
-    def _create_presigned_put_url(self, object_key: str, content_type: str | None) -> str:
+    def ensure_bucket(self, bucket_name: str) -> None:
+        client = self._create_s3_client()
+        try:
+            client.head_bucket(Bucket=bucket_name)
+            return
+        except Exception:
+            client.create_bucket(Bucket=bucket_name)
+
+    def _create_presigned_put_url(
+        self,
+        bucket_name: str,
+        object_key: str,
+        content_type: str | None,
+    ) -> str:
+        client = self._create_s3_client()
+        params = {"Bucket": bucket_name, "Key": object_key}
+        if content_type:
+            params["ContentType"] = content_type
+        return str(client.generate_presigned_url("put_object", Params=params, ExpiresIn=900))
+
+    def _create_s3_client(self):
         settings = get_settings()
         if not settings.rustfs_access_key or not settings.rustfs_secret_key:
             raise RuntimeError("RustFS credentials are not configured")
@@ -87,7 +120,7 @@ class ObjectStorageService:
         except ImportError as exc:  # pragma: no cover - depends on runtime environment
             raise RuntimeError("boto3 is required for RustFS presigned uploads") from exc
 
-        client = boto3.client(
+        return boto3.client(
             "s3",
             endpoint_url=settings.rustfs_endpoint,
             aws_access_key_id=settings.rustfs_access_key,
@@ -95,17 +128,13 @@ class ObjectStorageService:
             region_name=settings.rustfs_region,
             config=Config(signature_version="s3v4"),
         )
-        params = {"Bucket": settings.rustfs_bucket, "Key": object_key}
-        if content_type:
-            params["ContentType"] = content_type
-        return str(client.generate_presigned_url("put_object", Params=params, ExpiresIn=900))
 
-    def _build_file_url(self, object_key: str) -> str:
+    def _build_file_url(self, bucket_name: str, object_key: str) -> str:
         settings = get_settings()
         if settings.rustfs_public_base_url:
             base = settings.rustfs_public_base_url.rstrip("/")
             return f"{base}/{quote(object_key)}"
-        return f"s3://{settings.rustfs_bucket}/{object_key}"
+        return f"s3://{bucket_name}/{object_key}"
 
 
 class _CountingAsyncIterator:
@@ -131,6 +160,3 @@ def _read_file_chunks(file_obj: BinaryIO, chunk_size: int = 1024 * 1024) -> Iter
         if not chunk:
             break
         yield chunk
-
-
-

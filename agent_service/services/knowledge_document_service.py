@@ -73,6 +73,7 @@ class KnowledgeDocumentService:
             collection_name=collection_name,
             created_by=settings.upload_created_by,
         )
+        self.storage.ensure_bucket(collection_name)
         self.repository.insert_knowledge_base(record)
         return KnowledgeBaseCreateResponse(
             id=kb_id,
@@ -97,12 +98,16 @@ class KnowledgeDocumentService:
         original_name = _safe_file_name(upload_file.filename or "upload.bin")
         file_type = _file_type_from_name(original_name)
         object_key = _build_object_key(kb.id, original_name)
+        self.storage.ensure_bucket(_bucket_name_for(kb))
         content_type = upload_file.content_type or mimetypes.guess_type(original_name)[0]
+        content_length = _upload_file_size(upload_file)
         stored = await self.storage.upload_async_stream(
+            bucket_name=_bucket_name_for(kb),
             object_key=object_key,
             file_name=original_name,
             content_type=content_type,
             content=_upload_file_chunks(upload_file),
+            content_length=content_length,
         )
         return self._insert_document(
             kb=kb,
@@ -134,8 +139,10 @@ class KnowledgeDocumentService:
             temp_path = downloaded.path
             file_type = _file_type_from_name(downloaded.file_name)
             object_key = _build_object_key(kb.id, downloaded.file_name)
+            self.storage.ensure_bucket(_bucket_name_for(kb))
             stored = await self.storage.upload_local_file(
                 path=temp_path,
+                bucket_name=_bucket_name_for(kb),
                 object_key=object_key,
                 file_name=downloaded.file_name,
                 content_type=downloaded.content_type,
@@ -308,6 +315,22 @@ async def _upload_file_chunks(upload_file: UploadFile) -> AsyncIterator[bytes]:
         yield chunk
 
 
+
+
+def _upload_file_size(upload_file: UploadFile) -> int | None:
+    file_obj = upload_file.file
+    try:
+        current = file_obj.tell()
+        file_obj.seek(0, 2)
+        size = file_obj.tell()
+        file_obj.seek(current)
+        return int(size)
+    except (OSError, AttributeError):
+        return None
+def _bucket_name_for(kb: KnowledgeBaseSummary) -> str:
+    if kb.collectionName:
+        return kb.collectionName
+    return kb.id
 def _new_id() -> str:
     return uuid.uuid4().hex[:20]
 

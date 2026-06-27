@@ -58,6 +58,14 @@ def test_url_schedule_sync_is_left_for_later() -> None:
                 "scheduleCron": "0 0 * * *",
             }
         )
+
+class FakeObjectStorage:
+    def __init__(self) -> None:
+        self.bucket_name = None
+
+    def ensure_bucket(self, bucket_name: str) -> None:
+        self.bucket_name = bucket_name
+
 class FakeKnowledgeRepository:
     def __init__(self) -> None:
         self.record = None
@@ -85,7 +93,8 @@ def test_knowledge_base_create_page_is_served() -> None:
 
 def test_create_knowledge_base_builds_database_record() -> None:
     repository = FakeKnowledgeRepository()
-    service = KnowledgeDocumentService(repository=repository, storage=None)
+    storage = FakeObjectStorage()
+    service = KnowledgeDocumentService(repository=repository, storage=storage)
 
     result = service.create_knowledge_base(
         name="support-kb",
@@ -102,6 +111,7 @@ def test_create_knowledge_base_builds_database_record() -> None:
     assert repository.record.name == "support-kb"
     assert repository.record.embedding_model == "text-embedding-3-small"
     assert repository.record.collection_name == "support_kb"
+    assert storage.bucket_name == "support_kb"
 
 
 def test_create_knowledge_base_rejects_bad_collection_name() -> None:

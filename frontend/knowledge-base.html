@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>创建知识库</title>
+  <link rel="stylesheet" href="./css/element.css">
+  <link rel="stylesheet" href="./css/main.css">
+  <link rel="stylesheet" href="./css/knowledge-upload.css?v=20260627">
+</head>
+<body>
+<div id="app">
+  <div class="kb-page">
+    <aside class="kb-sidebar">
+      <div class="brand-block">
+        <div class="brand-mark">H</div>
+        <div>
+          <div class="brand-title">HYEEE AI</div>
+          <div class="brand-subtitle">知识库管理</div>
+        </div>
+      </div>
+      <button class="side-link active" type="button">
+        <i class="el-icon-folder-add"></i>
+        <span>创建知识库</span>
+      </button>
+      <button class="side-link" type="button" @click="goUpload">
+        <i class="el-icon-upload2"></i>
+        <span>上传文档</span>
+      </button>
+      <button class="side-link" type="button" @click="goChat">
+        <i class="el-icon-chat-line-round"></i>
+        <span>返回聊天</span>
+      </button>
+    </aside>
+
+    <main class="kb-main">
+      <header class="kb-header">
+        <div>
+          <div class="header-title">创建知识库</div>
+          <div class="header-subtitle">创建后可在上传页面选择该知识库并添加 RAG 文档</div>
+        </div>
+        <div class="status-pill">
+          <span class="status-dot"></span>
+          {{submitting ? "创建中" : "就绪"}}
+        </div>
+      </header>
+
+      <section class="kb-content">
+        <form class="upload-form" @submit.prevent="submitCreate">
+          <div class="form-section">
+            <div class="section-title">知识库名称</div>
+            <el-input v-model="form.name" maxlength="128" placeholder="例如：客服知识库"></el-input>
+          </div>
+
+          <div class="form-section">
+            <div class="section-title">嵌入模型</div>
+            <el-input v-model="form.embeddingModel" maxlength="64" placeholder="例如：text-embedding-3-small"></el-input>
+          </div>
+
+          <div class="form-section">
+            <div class="section-title">Collection 名称</div>
+            <el-input v-model="form.collectionName" maxlength="64" placeholder="例如：support_kb"></el-input>
+            <div class="todo-line">仅支持字母、数字、下划线和短横线，且需要唯一。</div>
+          </div>
+
+          <div class="actions">
+            <button class="submit-btn" type="submit" :disabled="submitting">
+              <i class="el-icon-folder-add"></i>
+              <span>{{submitting ? "创建中" : "创建知识库"}}</span>
+            </button>
+            <button class="reset-btn" type="button" @click="resetForm">重置</button>
+          </div>
+        </form>
+
+        <aside class="result-panel">
+          <div class="panel-title">创建结果</div>
+          <div v-if="!result && !errorMessage" class="empty-result">等待提交</div>
+          <div v-if="errorMessage" class="error-result">{{errorMessage}}</div>
+          <div v-if="result" class="result-list">
+            <div class="result-row"><span>ID</span><strong>{{result.id}}</strong></div>
+            <div class="result-row"><span>名称</span><strong>{{result.name}}</strong></div>
+            <div class="result-row"><span>模型</span><strong>{{result.embeddingModel}}</strong></div>
+            <div class="result-row"><span>Collection</span><strong>{{result.collectionName}}</strong></div>
+            <div class="result-row"><span>创建人</span><strong>{{result.createdBy}}</strong></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+</div>
+<script src="./js/vue.js"></script>
+<script src="./js/axios.min.js"></script>
+<script src="./js/element.js"></script>
+<script>
+  axios.defaults.timeout = 30000;
+
+  new Vue({
+    el: "#app",
+    data: {
+      submitting: false,
+      collectionTouched: false,
+      result: null,
+      errorMessage: "",
+      form: {
+        name: "",
+        embeddingModel: "text-embedding-3-small",
+        collectionName: ""
+      }
+    },
+    watch: {
+      "form.name"(value) {
+        if (!this.collectionTouched) {
+          this.form.collectionName = this.toCollectionName(value);
+        }
+      },
+      "form.collectionName"() {
+        this.collectionTouched = true;
+      }
+    },
+    methods: {
+      goUpload() {
+        location.href = "/ui/knowledge-upload.html";
+      },
+      goChat() {
+        location.href = "/ui/chat.html";
+      },
+      validateForm() {
+        if (!this.form.name.trim()) return "请输入知识库名称";
+        if (!this.form.embeddingModel.trim()) return "请输入嵌入模型";
+        if (!this.form.collectionName.trim()) return "请输入 Collection 名称";
+        if (!/^[A-Za-z0-9_-]{1,64}$/.test(this.form.collectionName.trim())) {
+          return "Collection 名称只支持字母、数字、下划线和短横线";
+        }
+        return "";
+      },
+      submitCreate() {
+        const message = this.validateForm();
+        if (message) {
+          this.$message.warning(message);
+          return;
+        }
+        this.submitting = true;
+        this.result = null;
+        this.errorMessage = "";
+        axios.post("/v1/knowledge-bases", {
+          name: this.form.name.trim(),
+          embeddingModel: this.form.embeddingModel.trim(),
+          collectionName: this.form.collectionName.trim()
+        }).then(({data}) => {
+          this.result = data;
+          this.$message.success("知识库已创建");
+        }).catch(err => {
+          this.errorMessage = this.readError(err);
+          this.$message.error(this.errorMessage);
+        }).finally(() => {
+          this.submitting = false;
+        });
+      },
+      resetForm() {
+        this.result = null;
+        this.errorMessage = "";
+        this.collectionTouched = false;
+        this.form.name = "";
+        this.form.embeddingModel = "text-embedding-3-small";
+        this.form.collectionName = "";
+      },
+      toCollectionName(value) {
+        const source = String(value || "").trim().toLowerCase();
+        const ascii = source.replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+        return ascii || "kb_" + Date.now();
+      },
+      readError(err) {
+        return err && err.response && err.response.data && err.response.data.detail
+          ? err.response.data.detail
+          : String(err);
+      }
+    }
+  });
+</script>
+</body>
+</html>

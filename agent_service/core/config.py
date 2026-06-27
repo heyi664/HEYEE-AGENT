@@ -32,6 +32,20 @@ class Settings(BaseSettings):
     mcp_tool_prefix: str = ""
     mcp_fail_fast: bool = False
 
+    database_url: str | None = None
+
+    rustfs_endpoint: str = "http://127.0.0.1:9000"
+    rustfs_access_key: str | None = None
+    rustfs_secret_key: str | None = None
+    rustfs_bucket: str = "knowledge-base"
+    rustfs_region: str = "us-east-1"
+    rustfs_public_base_url: str | None = None
+
+    upload_temp_dir: str = "./tmp/uploads"
+    upload_max_size_mb: int = Field(default=100, gt=0)
+    remote_download_timeout_seconds: float = Field(default=60.0, gt=0)
+    upload_created_by: str = "agent"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

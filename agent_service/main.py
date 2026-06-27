@@ -18,6 +18,7 @@ from agent_service.core.errors import register_exception_handlers
 from agent_service.core.logging import configure_logging
 from agent_service.mcp.adapter import register_mcp_tools
 from agent_service.mcp.http_client import StreamableHttpMcpClient
+from agent_service.middleware.upload_rate_limit import UploadRateLimitMiddleware
 from agent_service.tools.builtin import register_builtin_tools
 from agent_service.tools.registry import tool_registry
 
@@ -81,6 +82,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(UploadRateLimitMiddleware, settings=settings)
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(chat_router, prefix="/v1/agent")

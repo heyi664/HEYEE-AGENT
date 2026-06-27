@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     upload_max_size_mb: int = Field(default=100, gt=0)
     remote_download_timeout_seconds: float = Field(default=60.0, gt=0)
     upload_created_by: str = "agent"
+    upload_rate_limit_enabled: bool = True
+    upload_rate_limit_redis_url: str = "redis://:123456@192.168.23.129:6379/0"
+    upload_rate_limit_key: str = "heyee:knowledge-upload:semaphore"
+    upload_rate_limit_permits: int = Field(default=3, ge=1)
+    upload_rate_limit_lease_seconds: int = Field(default=900, ge=1)
+    upload_rate_limit_acquire_timeout_ms: int = Field(default=0, ge=0)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -57,3 +63,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+

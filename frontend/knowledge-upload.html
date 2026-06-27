@@ -74,6 +74,23 @@
             </div>
           </div>
 
+          <div class="form-section split chunk-section">
+            <div>
+              <div class="section-title">新上传文档</div>
+              <div class="readonly-field chunk-id-field" :class="{'placeholder': !(result && result.id)}">
+                {{result && result.id ? result.id : "上传成功后显示文档 ID"}}
+              </div>
+            </div>
+            <div>
+              <div class="section-title">分块操作</div>
+              <button class="chunk-btn" type="button" :disabled="chunking || !(result && result.id)" @click="startChunking">
+                <i class="el-icon-s-operation"></i>
+                <span>{{chunking ? "分块中" : "开始分块"}}</span>
+              </button>
+            </div>
+          </div>
+          <div v-if="chunkMessage" class="chunk-status success">{{chunkMessage}}</div>
+          <div v-if="chunkErrorMessage" class="chunk-status error">{{chunkErrorMessage}}</div>
           <div class="form-section split">
             <div>
               <div class="section-title">分块策略</div>
@@ -112,7 +129,6 @@
           <div v-if="!result && !errorMessage" class="empty-result">等待提交</div>
           <div v-if="errorMessage" class="error-result">{{errorMessage}}</div>
           <div v-if="result" class="result-list">
-            <div class="result-row"><span>文档 ID</span><strong>{{result.id}}</strong></div>
             <div class="result-row"><span>文档名称</span><strong>{{result.docName}}</strong></div>
             <div class="result-row"><span>状态</span><strong>{{result.status}}</strong></div>
             <div class="result-row"><span>来源</span><strong>{{result.sourceType}}</strong></div>
@@ -135,10 +151,13 @@
     data: {
       loadingBases: false,
       submitting: false,
+      chunking: false,
       knowledgeBases: [],
       selectedFile: null,
       result: null,
       errorMessage: "",
+      chunkMessage: "",
+      chunkErrorMessage: "",
       form: {
         knowledgeBaseName: "",
         sourceType: "FILE",
@@ -191,6 +210,8 @@
         this.submitting = true;
         this.result = null;
         this.errorMessage = "";
+        this.chunkMessage = "";
+        this.chunkErrorMessage = "";
         const request = this.form.sourceType === "FILE" ? this.buildFileRequest() : this.buildUrlRequest();
         axios.post("/v1/knowledge-documents/upload", request.body, request.config).then(({data}) => {
           this.result = data;
@@ -225,10 +246,36 @@
           config: { timeout: 120000 }
         };
       },
+      startChunking() {
+        if (!this.result || !this.result.id) {
+          this.$message.warning("请先上传文档");
+          return;
+        }
+        this.chunking = true;
+        this.chunkMessage = "";
+        this.chunkErrorMessage = "";
+        axios.post(this.buildStartChunkUrl(this.result.id), null, { timeout: 120000 }).then(({data}) => {
+          if (data && typeof data === "object") {
+            this.result = Object.assign({}, this.result, data);
+          }
+          this.chunkMessage = "分块任务已提交";
+          this.$message.success(this.chunkMessage);
+        }).catch(err => {
+          this.chunkErrorMessage = this.readError(err);
+          this.$message.error(this.chunkErrorMessage);
+        }).finally(() => {
+          this.chunking = false;
+        });
+      },
+      buildStartChunkUrl(documentId) {
+        return "/v1/knowledge-documents/" + encodeURIComponent(documentId) + "/chunks/start";
+      },
       resetForm() {
         this.selectedFile = null;
         this.result = null;
         this.errorMessage = "";
+        this.chunkMessage = "";
+        this.chunkErrorMessage = "";
         this.form.sourceType = "FILE";
         this.form.url = "";
         this.form.chunkStrategy = "fixed_size";

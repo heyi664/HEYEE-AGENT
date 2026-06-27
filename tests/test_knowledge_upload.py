@@ -20,6 +20,9 @@ def test_knowledge_upload_page_is_served() -> None:
     assert response.status_code == 200
     assert "/v1/knowledge-bases" in response.text
     assert "/v1/knowledge-documents/upload" in response.text
+    assert "/v1/knowledge-documents/" in response.text
+    assert "/chunks/start" in response.text
+    assert "开始分块" in response.text
     assert "fixed_size" in response.text
     assert "structure_aware" in response.text
     assert "PENDING" in response.text

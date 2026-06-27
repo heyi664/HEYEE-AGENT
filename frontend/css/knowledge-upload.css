@@ -320,6 +320,62 @@ button {
     line-height: 18px;
 }
 
+.chunk-section {
+    align-items: end;
+}
+
+.chunk-id-field {
+    overflow-wrap: anywhere;
+    font-weight: 700;
+}
+
+.chunk-id-field.placeholder {
+    color: #858c99;
+    font-weight: 400;
+}
+.chunk-btn {
+    width: 100%;
+    min-height: 40px;
+    padding: 0 18px;
+    border: none;
+    border-radius: 6px;
+    background: #ff6633;
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    flex: 0 0 auto;
+}
+
+.chunk-btn:disabled {
+    background: #c7cdd6;
+    color: #fff;
+    cursor: not-allowed;
+}
+
+.chunk-status {
+    margin-top: 10px;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 18px;
+}
+
+.chunk-status.success {
+    color: #14613c;
+    background: #eefaf3;
+    border: 1px solid #ccefdc;
+}
+
+.chunk-status.error {
+    color: #c44720;
+    background: #fff8f5;
+    border: 1px solid #ffd0c2;
+}
+
 .el-select {
     width: 100%;
 }

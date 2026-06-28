@@ -31,6 +31,21 @@ class KnowledgeDocumentRecord:
     created_by: str
 
 
+@dataclass(frozen=True)
+class KnowledgeDocumentChunkTarget:
+    id: str
+    kb_id: str
+    doc_name: str
+    file_url: str
+    file_type: str
+    file_size: int
+    source_type: str
+    source_location: str | None
+    chunk_strategy: str
+    chunk_config: dict[str, Any]
+    status: str
+
+
 class KnowledgeRepository:
     def list_knowledge_bases(self) -> list[KnowledgeBaseSummary]:
         from sqlalchemy import text
@@ -224,3 +239,61 @@ class KnowledgeRepository:
                     "created_by": record.created_by,
                 },
             )
+
+    def mark_document_chunk_running_cas(
+        self,
+        *,
+        doc_id: str,
+        updated_by: str,
+    ) -> KnowledgeDocumentChunkTarget | None:
+        from sqlalchemy import text
+
+        engine = get_engine()
+        with engine.begin() as conn:
+            row = (
+                conn.execute(
+                    text(
+                        """
+                        UPDATE t_knowledge_document
+                        SET status = 'RUNNING',
+                            updated_by = :updated_by,
+                            update_time = CURRENT_TIMESTAMP
+                        WHERE id = :doc_id
+                          AND deleted = 0
+                          AND status = 'PENDING'
+                        RETURNING
+                            id,
+                            kb_id,
+                            doc_name,
+                            file_url,
+                            file_type,
+                            file_size,
+                            source_type,
+                            source_location,
+                            chunk_strategy,
+                            chunk_config,
+                            status
+                        """
+                    ),
+                    {"doc_id": doc_id, "updated_by": updated_by},
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            return None
+        return KnowledgeDocumentChunkTarget(
+            id=str(row["id"]),
+            kb_id=str(row["kb_id"]),
+            doc_name=str(row["doc_name"]),
+            file_url=str(row["file_url"]),
+            file_type=str(row["file_type"]),
+            file_size=int(row["file_size"] or 0),
+            source_type=str(row["source_type"]),
+            source_location=(
+                str(row["source_location"]) if row["source_location"] is not None else None
+            ),
+            chunk_strategy=str(row["chunk_strategy"]),
+            chunk_config=dict(row["chunk_config"] or {}),
+            status=str(row["status"]),
+        )

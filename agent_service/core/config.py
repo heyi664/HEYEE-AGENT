@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     upload_rate_limit_lease_seconds: int = Field(default=900, ge=1)
     upload_rate_limit_acquire_timeout_ms: int = Field(default=0, ge=0)
 
+    rocketmq_mock_mode: bool = True
+    rocketmq_name_server: str = "127.0.0.1:9876"
+    rocketmq_producer_group: str = "heyee-agent-chunk-producer"
+    rocketmq_chunk_topic: str = "heyee-knowledge-document-chunk"
+    rocketmq_chunk_tag: str = "START_CHUNK"
+    rocketmq_access_key: str | None = None
+    rocketmq_secret_key: str | None = None
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

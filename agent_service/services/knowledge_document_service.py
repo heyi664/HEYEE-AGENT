@@ -18,6 +18,7 @@ from starlette.datastructures import UploadFile
 from agent_service.core.config import get_settings
 from agent_service.repositories.knowledge_repository import (
     KnowledgeBaseRecord,
+    KnowledgeDocumentChunkTarget,
     KnowledgeDocumentRecord,
     KnowledgeRepository,
 )
@@ -25,9 +26,14 @@ from agent_service.schemas.knowledge import (
     ALLOWED_CHUNK_STRATEGIES,
     KnowledgeBaseCreateResponse,
     KnowledgeBaseSummary,
+    KnowledgeDocumentChunkStartResponse,
     KnowledgeDocumentUploadResult,
 )
 from agent_service.services.object_storage_service import ObjectStorageService, StoredObject
+from agent_service.services.rocketmq_transaction_producer import (
+    TransactionMessageProducer,
+    get_rocketmq_transaction_producer,
+)
 
 
 @dataclass(frozen=True)
@@ -41,9 +47,11 @@ class KnowledgeDocumentService:
         self,
         repository: KnowledgeRepository | None = None,
         storage: ObjectStorageService | None = None,
+        chunk_producer: TransactionMessageProducer | None = None,
     ) -> None:
         self.repository = repository or KnowledgeRepository()
         self.storage = storage or ObjectStorageService()
+        self.chunk_producer = chunk_producer or get_rocketmq_transaction_producer()
 
     def list_knowledge_bases(self) -> list[KnowledgeBaseSummary]:
         return self.repository.list_knowledge_bases()
@@ -159,6 +167,53 @@ class KnowledgeDocumentService:
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
 
+    def start_chunking(self, document_id: str) -> KnowledgeDocumentChunkStartResponse:
+        document_id = document_id.strip()
+        if not document_id:
+            raise HTTPException(status_code=400, detail="document id is required")
+
+        settings = get_settings()
+        transaction_state: dict[str, KnowledgeDocumentChunkTarget] = {}
+
+        def local_transaction() -> KnowledgeDocumentChunkTarget:
+            target = self.repository.mark_document_chunk_running_cas(
+                doc_id=document_id,
+                updated_by=settings.upload_created_by,
+            )
+            if target is None:
+                raise HTTPException(status_code=409, detail="文档不存在或当前状态不允许开始分块")
+            transaction_state["target"] = target
+            return target
+
+        result = self.chunk_producer.send_in_transaction(
+            topic=settings.rocketmq_chunk_topic,
+            tag=settings.rocketmq_chunk_tag,
+            key=document_id,
+            local_transaction=local_transaction,
+            message_builder=lambda target: self._build_chunk_message(target),
+        )
+        target = transaction_state["target"]
+        return KnowledgeDocumentChunkStartResponse(
+            id=target.id,
+            knowledgeBaseId=target.kb_id,
+            status=target.status,
+            messageId=result.message_id,
+        )
+
+    def _build_chunk_message(self, target: KnowledgeDocumentChunkTarget) -> dict[str, object]:
+        return {
+            "docId": target.id,
+            "kbId": target.kb_id,
+            "docName": target.doc_name,
+            "fileUrl": target.file_url,
+            "fileType": target.file_type,
+            "fileSize": target.file_size,
+            "sourceType": target.source_type,
+            "sourceLocation": target.source_location,
+            "chunkStrategy": target.chunk_strategy,
+            "chunkConfig": target.chunk_config,
+            "status": target.status,
+        }
     def _get_knowledge_base_or_404(self, name: str) -> KnowledgeBaseSummary:
         kb = self.repository.find_knowledge_base_by_name(name.strip())
         if kb is None:

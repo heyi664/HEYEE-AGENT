@@ -6,8 +6,10 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from agent_service.main import create_app
+from agent_service.repositories.knowledge_repository import KnowledgeDocumentChunkTarget
 from agent_service.schemas.knowledge import KnowledgeDocumentUrlUploadRequest
 from agent_service.services.knowledge_document_service import KnowledgeDocumentService
+from agent_service.services.rocketmq_transaction_producer import TransactionSendResult
 
 DEFAULT_CHUNK_CONFIG = '{"targetChars":1400,"maxChars":1800,"minChars":600,"overlapChars":0}'
 
@@ -128,3 +130,75 @@ def test_create_knowledge_base_rejects_bad_collection_name() -> None:
                 "collectionName": "bad collection name",
             }
         )
+
+class FakeChunkProducer:
+    def __init__(self) -> None:
+        self.sent_payload = None
+        self.local_transaction_started = False
+        self.message_built = False
+
+    def send_in_transaction(self, *, topic, tag, key, local_transaction, message_builder):
+        assert topic
+        assert tag
+        assert key == "doc-1"
+        self.local_transaction_started = True
+        target = local_transaction()
+        self.sent_payload = message_builder(target)
+        self.message_built = True
+        return TransactionSendResult(message_id="msg-1")
+
+
+class FakeChunkRepository:
+    def __init__(self, target=None) -> None:
+        self.target = target
+        self.cas_calls = []
+
+    def mark_document_chunk_running_cas(self, *, doc_id: str, updated_by: str):
+        self.cas_calls.append((doc_id, updated_by))
+        return self.target
+
+
+def test_start_chunking_sends_transaction_message_after_cas() -> None:
+    target = KnowledgeDocumentChunkTarget(
+        id="doc-1",
+        kb_id="kb-1",
+        doc_name="manual.pdf",
+        file_url="s3://bucket/manual.pdf",
+        file_type="pdf",
+        file_size=123,
+        source_type="FILE",
+        source_location=None,
+        chunk_strategy="fixed_size",
+        chunk_config={"targetChars": 1400},
+        status="RUNNING",
+    )
+    repository = FakeChunkRepository(target)
+    producer = FakeChunkProducer()
+    service = KnowledgeDocumentService(repository=repository, storage=None, chunk_producer=producer)
+
+    result = service.start_chunking("doc-1")
+
+    assert result.id == "doc-1"
+    assert result.knowledgeBaseId == "kb-1"
+    assert result.status == "RUNNING"
+    assert result.messageId == "msg-1"
+    assert repository.cas_calls == [("doc-1", "agent")]
+    assert producer.local_transaction_started is True
+    assert producer.sent_payload["docId"] == "doc-1"
+    assert producer.sent_payload["kbId"] == "kb-1"
+    assert producer.sent_payload["status"] == "RUNNING"
+
+
+def test_start_chunking_drops_message_when_cas_fails() -> None:
+    repository = FakeChunkRepository(target=None)
+    producer = FakeChunkProducer()
+    service = KnowledgeDocumentService(repository=repository, storage=None, chunk_producer=producer)
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.start_chunking("doc-1")
+
+    assert exc_info.value.status_code == 409
+    assert repository.cas_calls == [("doc-1", "agent")]
+    assert producer.local_transaction_started is True
+    assert producer.message_built is False
+    assert producer.sent_payload is None

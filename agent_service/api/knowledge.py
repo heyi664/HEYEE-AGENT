@@ -9,6 +9,7 @@ from agent_service.schemas.knowledge import (
     KnowledgeBaseCreateRequest,
     KnowledgeBaseCreateResponse,
     KnowledgeBaseSummary,
+    KnowledgeDocumentChunkStartResponse,
     KnowledgeDocumentUploadResult,
     KnowledgeDocumentUrlUploadRequest,
 )
@@ -38,6 +39,16 @@ def create_knowledge_base(
         embedding_model=request.embeddingModel,
         collection_name=request.collectionName,
     )
+
+@router.post(
+    "/knowledge-documents/{document_id}/chunks/start",
+    response_model=KnowledgeDocumentChunkStartResponse,
+)
+def start_knowledge_document_chunking(
+    document_id: str,
+    service: KnowledgeDocumentService = Depends(get_knowledge_document_service),
+) -> KnowledgeDocumentChunkStartResponse:
+    return service.start_chunking(document_id)
 
 @router.post("/knowledge-documents/upload", response_model=KnowledgeDocumentUploadResult)
 async def upload_knowledge_document(

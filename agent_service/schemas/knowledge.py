@@ -86,3 +86,10 @@ class KnowledgeDocumentUploadResult(BaseModel):
     chunkStrategy: str
     chunkConfig: dict[str, Any]
     chunkCount: int = 0
+
+
+class KnowledgeDocumentChunkStartResponse(BaseModel):
+    id: str
+    knowledgeBaseId: str
+    status: str
+    messageId: str | None = None

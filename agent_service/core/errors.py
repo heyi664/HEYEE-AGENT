@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 
@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 
 class ModelUnavailableError(RuntimeError):
     """Raised when the configured model provider cannot produce a response."""
+
+
+class MessageQueueUnavailableError(RuntimeError):
+    """Raised when the configured message queue cannot accept work."""
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -27,6 +31,13 @@ def register_exception_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         logger.warning("model unavailable path=%s error=%s", request.url.path, exc)
         return JSONResponse(status_code=503, content={"detail": "AI model is unavailable"})
+
+    @app.exception_handler(MessageQueueUnavailableError)
+    async def message_queue_unavailable_handler(
+        request: Request, exc: MessageQueueUnavailableError
+    ) -> JSONResponse:
+        logger.warning("message queue unavailable path=%s error=%s", request.url.path, exc)
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
 
     @app.exception_handler(HTTPException)
     async def http_error_handler(request: Request, exc: HTTPException) -> JSONResponse:

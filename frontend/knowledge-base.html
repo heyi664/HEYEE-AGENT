@@ -54,7 +54,7 @@
 
           <div class="form-section">
             <div class="section-title">嵌入模型</div>
-            <el-input v-model="form.embeddingModel" maxlength="64" placeholder="例如：text-embedding-3-small"></el-input>
+            <el-input v-model="form.embeddingModel" maxlength="64" placeholder="例如：BAAI/bge-m3"></el-input>
           </div>
 
           <div class="form-section">
@@ -103,7 +103,7 @@
       errorMessage: "",
       form: {
         name: "",
-        embeddingModel: "text-embedding-3-small",
+        embeddingModel: "BAAI/bge-m3",
         collectionName: ""
       }
     },

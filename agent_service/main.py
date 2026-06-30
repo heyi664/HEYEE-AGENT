@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from agent_service.api.chat import router as chat_router
 from agent_service.api.health import router as health_router
 from agent_service.api.knowledge import router as knowledge_router
+from agent_service.api.knowledge_chunk_dev import router as knowledge_chunk_dev_router
 from agent_service.core.config import get_settings
 from agent_service.core.errors import register_exception_handlers
 from agent_service.core.logging import configure_logging
@@ -87,6 +88,8 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(chat_router, prefix="/v1/agent")
     app.include_router(knowledge_router, prefix="/v1")
+    if settings.agent_mock_mode:
+        app.include_router(knowledge_chunk_dev_router, prefix="/v1")
     app.mount("/ui", StaticFiles(directory="frontend", html=True), name="frontend")
 
     @app.get("/", include_in_schema=False)

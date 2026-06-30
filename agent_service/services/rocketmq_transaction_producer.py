@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
 from agent_service.core.config import get_settings
+from agent_service.core.errors import MessageQueueUnavailableError
 
 T = TypeVar("T")
 
@@ -44,7 +45,6 @@ class RocketMqTransactionProducer:
     ) -> TransactionSendResult:
         if self.settings.rocketmq_mock_mode:
             transaction_result = local_transaction()
-            # Keep the same payload validation path in local/mock mode.
             json.dumps(message_builder(transaction_result), ensure_ascii=False)
             return TransactionSendResult(message_id=f"mock-{key}", transaction_id=None)
 
@@ -69,42 +69,41 @@ class RocketMqTransactionProducer:
             from rocketmq.client import (  # type: ignore[import-not-found]
                 Message,
                 TransactionMQProducer,
+                TransactionStatus,
             )
-        except Exception as exc:  # pragma: no cover - depends on deployment package
-            raise RuntimeError(
-                "rocketmq-client-python is required when ROCKETMQ_MOCK_MODE=false"
+        except Exception as exc:  # pragma: no cover - depends on deployment package/platform
+            raise MessageQueueUnavailableError(
+                "RocketMQ 客户端不可用：请确认已安装 rocketmq-client-python，"
+                "并在 Linux/WSL/Docker 等受支持环境运行，或开启 ROCKETMQ_MOCK_MODE"
             ) from exc
 
         transaction_holder: dict[str, T] = {}
 
-        def execute_local_transaction(_message: object, _user_args: object) -> int:
-            try:
-                transaction_holder["result"] = local_transaction()
-                return 1
-            except Exception:
-                return 2
+        def check_callback(_message: object) -> int:
+            if "result" in transaction_holder:
+                return TransactionStatus.COMMIT
+            return TransactionStatus.ROLLBACK
 
-        producer = TransactionMQProducer(self.settings.rocketmq_producer_group)
+        def local_execute(_message: object, _user_args: object) -> int:
+            try:
+                transaction_result = local_transaction()
+                transaction_holder["result"] = transaction_result
+                # Validate the final consumer payload shape. The consumer can still recover all
+                # fields from docId by querying the database if a broker/client cannot mutate body.
+                json.dumps(message_builder(transaction_result), ensure_ascii=False)
+                return TransactionStatus.COMMIT
+            except Exception:
+                return TransactionStatus.ROLLBACK
+
+        producer = TransactionMQProducer(self.settings.rocketmq_producer_group, check_callback)
         producer.set_name_server_address(self.settings.rocketmq_name_server)
-        producer.set_session_credentials(
-            self.settings.rocketmq_access_key or "",
-            self.settings.rocketmq_secret_key or "",
-            "",
-        )
-        producer.set_transaction_listener(execute_local_transaction, None)
         producer.start()
         try:
-            # The transaction message API requires a half-message before the local transaction.
-            # The complete chunk payload is still derived from the CAS result in the callback path.
-            initial_body = json.dumps({"docId": key}, ensure_ascii=False).encode("utf-8")
             message = Message(topic)
             message.set_tags(tag)
             message.set_keys(key)
-            message.set_body(initial_body)
-            send_result = producer.send_message_in_transaction(message, None)
-            tx_result = transaction_holder.get("result")
-            if tx_result is not None:
-                json.dumps(message_builder(tx_result), ensure_ascii=False)
+            message.set_body(json.dumps({"docId": key}, ensure_ascii=False).encode("utf-8"))
+            send_result = producer.send_message_in_transaction(message, local_execute, None)
             return TransactionSendResult(
                 message_id=getattr(send_result, "msg_id", None),
                 transaction_id=getattr(send_result, "transaction_id", None),

@@ -23,6 +23,18 @@ class Settings(BaseSettings):
     ai_timeout_seconds: float = Field(default=25.0, gt=0)
     agent_max_steps: int = Field(default=5, ge=1, le=10)
 
+    embedding_provider: str = "siliconflow"
+    embedding_api_key: str | None = None
+    embedding_base_url: str = "https://api.siliconflow.cn/v1"
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_dimension: int = Field(default=1024, gt=0)
+    embedding_batch_size: int = Field(default=32, ge=1)
+    embedding_timeout_seconds: float = Field(default=60.0, gt=0)
+
+    tika_server_url: str = "http://127.0.0.1:9998"
+    tika_timeout_seconds: float = Field(default=60.0, gt=0)
+    chunk_pipeline_max_retries: int = Field(default=2, ge=0)
+    chunk_pipeline_retry_backoff_seconds: float = Field(default=0.5, ge=0)
     java_service_url: str = "http://127.0.0.1:8081"
 
     mcp_enabled: bool = False
@@ -55,6 +67,7 @@ class Settings(BaseSettings):
     rocketmq_mock_mode: bool = True
     rocketmq_name_server: str = "127.0.0.1:9876"
     rocketmq_producer_group: str = "heyee-agent-chunk-producer"
+    rocketmq_consumer_group: str = "heyee-agent-chunk-consumer"
     rocketmq_chunk_topic: str = "heyee-knowledge-document-chunk"
     rocketmq_chunk_tag: str = "START_CHUNK"
     rocketmq_access_key: str | None = None

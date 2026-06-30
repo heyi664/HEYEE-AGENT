@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from agent_service.core.config import Settings
 from agent_service.main import create_app
 from agent_service.repositories.knowledge_repository import KnowledgeDocumentChunkTarget
 from agent_service.schemas.knowledge import KnowledgeDocumentUrlUploadRequest
@@ -202,3 +205,28 @@ def test_start_chunking_drops_message_when_cas_fails() -> None:
     assert producer.local_transaction_started is True
     assert producer.message_built is False
     assert producer.sent_payload is None
+
+
+def test_embedding_defaults_target_siliconflow_bge_m3() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.embedding_provider == "siliconflow"
+    assert settings.embedding_model == "BAAI/bge-m3"
+    assert settings.embedding_dimension == 1024
+    assert settings.embedding_base_url == "https://api.siliconflow.cn/v1"
+
+
+def test_chunk_log_message_id_sql_patch_is_present() -> None:
+    sql = Path("sql/20260628_add_chunk_log_message_id.sql").read_text(encoding="utf-8")
+
+    assert "ADD COLUMN IF NOT EXISTS message_id" in sql
+    assert "idx_chunk_log_message_id" in sql
+
+
+def test_mock_chunk_consumer_route_is_registered_in_mock_mode() -> None:
+    client = TestClient(create_app())
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    assert "/v1/knowledge-documents/chunks/mock-consume" in response.text

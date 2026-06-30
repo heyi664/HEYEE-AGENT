@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -89,6 +89,16 @@ class ObjectStorageService:
             file_size=file_size,
         )
 
+
+    def download_file_url(self, file_url: str) -> bytes:
+        bucket_name, object_key = _parse_s3_file_url(file_url)
+        client = self._create_s3_client()
+        response = client.get_object(Bucket=bucket_name, Key=object_key)
+        body = response["Body"]
+        try:
+            return body.read()
+        finally:
+            body.close()
     def ensure_bucket(self, bucket_name: str) -> None:
         client = self._create_s3_client()
         try:
@@ -160,3 +170,9 @@ def _read_file_chunks(file_obj: BinaryIO, chunk_size: int = 1024 * 1024) -> Iter
         if not chunk:
             break
         yield chunk
+
+def _parse_s3_file_url(file_url: str) -> tuple[str, str]:
+    parsed = urlparse(file_url)
+    if parsed.scheme != "s3" or not parsed.netloc or not parsed.path:
+        raise ValueError("fileUrl must be an s3://bucket/object-key URL")
+    return parsed.netloc, parsed.path.lstrip("/")

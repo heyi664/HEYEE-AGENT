@@ -359,9 +359,15 @@ button {
 .chunk-status {
     margin-top: 10px;
     border-radius: 6px;
-    padding: 10px 12px;
-    font-size: 13px;
-    line-height: 18px;
+    padding: 10px 20px;
+    min-height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    font-size: 16px;
+    line-height: 22px;
+    box-sizing: border-box;
 }
 
 .chunk-status.success {
@@ -385,64 +391,33 @@ button {
     font-family: Arial, "Microsoft YaHei", sans-serif;
 }
 
-.chunk-progress {
-    margin-top: 10px;
-    border: 1px solid #d8dde6;
-    border-radius: 6px;
-    background: #fff;
-    padding: 12px;
-}
-
-.chunk-progress-head {
-    display: flex;
+.chunk-timer {
+    flex: 0 0 auto;
+    min-width: 84px;
+    display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    color: #4e5562;
-    font-size: 13px;
-    font-weight: 700;
-}
-
-.chunk-progress-head strong {
-    color: #ff6633;
-}
-
-.chunk-progress-grid {
-    margin-top: 10px;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
-}
-
-.chunk-progress-grid div {
-    min-width: 0;
-    border-radius: 4px;
-    background: #f6f7f9;
-    padding: 8px;
-    box-sizing: border-box;
-}
-
-.chunk-progress-grid span,
-.chunk-progress-grid strong {
-    display: block;
-    overflow-wrap: anywhere;
-}
-
-.chunk-progress-grid span {
-    color: #777f8c;
-    font-size: 12px;
-}
-
-.chunk-progress-grid strong {
-    margin-top: 4px;
+    justify-content: flex-end;
+    gap: 10px;
     color: #202124;
-    font-size: 13px;
+    font-size: 28px;
+    line-height: 32px;
 }
 
-.chunk-progress-error {
-    margin-top: 10px;
-    color: #c44720;
-    font-size: 13px;
-    line-height: 18px;
-    overflow-wrap: anywhere;
+.chunk-timer strong {
+    font-weight: 500;
+}
+
+.chunk-spinner {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid rgba(20, 97, 60, 0.18);
+    border-top-color: #20b26b;
+    animation: chunk-spin 0.8s linear infinite;
+}
+
+@keyframes chunk-spin {
+    to {
+        transform: rotate(360deg);
+    }
 }

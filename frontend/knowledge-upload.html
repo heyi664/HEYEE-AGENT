@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -90,20 +90,19 @@
             </div>
           </div>
 
-          <div v-if="chunkMessage" class="chunk-status success">{{chunkMessage}}</div>
-          <div v-if="chunkErrorMessage" class="chunk-status error">{{chunkErrorMessage}}</div>
-          <div v-if="chunkStatus" class="chunk-progress">
-            <div class="chunk-progress-head">
-              <span>分块状态</span>
-              <strong>{{displayChunkPhase}}</strong>
-            </div>
-            <div class="chunk-progress-grid">
-              <div><span>文档</span><strong>{{chunkStatus.status || "-"}}</strong></div>
-              <div><span>Log</span><strong>{{chunkStatus.logStatus || "-"}}</strong></div>
-              <div><span>分块数</span><strong>{{chunkStatus.chunkCount || 0}}</strong></div>
-              <div><span>总耗时</span><strong>{{formatDuration(chunkStatus.totalDuration)}}</strong></div>
-            </div>
-            <div v-if="chunkStatus.errorMessage" class="chunk-progress-error">{{chunkStatus.errorMessage}}</div>
+          <div v-if="chunkMessage" class="chunk-status success">
+            <span>{{chunkMessage}}</span>
+            <span v-if="showChunkTimer" class="chunk-timer">
+              <span v-if="chunkPolling || chunking" class="chunk-spinner"></span>
+              <strong>{{chunkElapsedText}}</strong>
+            </span>
+          </div>
+          <div v-if="chunkErrorMessage" class="chunk-status error">
+            <span>{{chunkErrorMessage}}</span>
+            <span v-if="showChunkTimer" class="chunk-timer">
+              <span v-if="chunkPolling || chunking" class="chunk-spinner"></span>
+              <strong>{{chunkElapsedText}}</strong>
+            </span>
           </div>
 
           <div class="form-section split">
@@ -179,6 +178,9 @@
       chunkPolling: false,
       chunkPollTimer: null,
       chunkPollFailures: 0,
+      chunkStartedAt: null,
+      chunkElapsedMs: 0,
+      chunkElapsedTimer: null,
       form: {
         knowledgeBaseName: "",
         sourceType: "FILE",
@@ -192,11 +194,14 @@
     },
     beforeDestroy() {
       this.stopChunkPolling();
+      this.resetChunkTimer();
     },
     computed: {
-      displayChunkPhase() {
-        if (!this.chunkStatus) return "-";
-        return this.chunkStatus.logStatus || this.chunkStatus.status || "-";
+      showChunkTimer() {
+        return this.chunkStartedAt !== null || this.chunkElapsedMs > 0;
+      },
+      chunkElapsedText() {
+        return (this.chunkElapsedMs / 1000).toFixed(1) + "s";
       }
     },
     methods: {
@@ -294,10 +299,12 @@
           }
           this.chunkMessage = "分块任务已提交，等待处理结果...";
           this.$message.success(this.chunkMessage);
+          this.startChunkTimer();
           this.fetchChunkStatus();
           this.startChunkPolling();
         }).catch(err => {
           this.stopChunkPolling();
+            this.stopChunkTimer();
           this.chunkErrorMessage = this.readError(err);
           this.$message.error(this.chunkErrorMessage);
         }).finally(() => {
@@ -325,6 +332,31 @@
         }
         this.chunkPolling = false;
       },
+      startChunkTimer() {
+        this.resetChunkTimer();
+        this.chunkStartedAt = Date.now();
+        this.chunkElapsedMs = 0;
+        this.chunkElapsedTimer = setInterval(() => {
+          this.chunkElapsedMs = Date.now() - this.chunkStartedAt;
+        }, 100);
+      },
+      stopChunkTimer() {
+        if (this.chunkElapsedTimer) {
+          clearInterval(this.chunkElapsedTimer);
+          this.chunkElapsedTimer = null;
+        }
+        if (this.chunkStartedAt !== null) {
+          this.chunkElapsedMs = Date.now() - this.chunkStartedAt;
+        }
+      },
+      resetChunkTimer() {
+        if (this.chunkElapsedTimer) {
+          clearInterval(this.chunkElapsedTimer);
+          this.chunkElapsedTimer = null;
+        }
+        this.chunkStartedAt = null;
+        this.chunkElapsedMs = 0;
+      },
       fetchChunkStatus() {
         if (!this.result || !this.result.id) return;
         axios.get(this.buildChunkStatusUrl(this.result.id), { timeout: 30000 }).then(({data}) => {
@@ -341,16 +373,19 @@
           const finalStatus = logStatus || docStatus;
           if (finalStatus === "SUCCESS") {
             this.stopChunkPolling();
+            this.stopChunkTimer();
             this.chunkMessage = "分块完成";
             this.chunkErrorMessage = "";
           } else if (finalStatus === "FAILED") {
             this.stopChunkPolling();
+            this.stopChunkTimer();
             this.chunkErrorMessage = data.errorMessage || "分块失败";
           }
         }).catch(err => {
           this.chunkPollFailures += 1;
           if (this.chunkPollFailures >= 5) {
             this.stopChunkPolling();
+            this.stopChunkTimer();
             this.chunkErrorMessage = "刷新分块状态失败：" + this.readError(err);
           }
         });
@@ -363,6 +398,7 @@
         this.chunkErrorMessage = "";
         this.chunkStatus = null;
         this.stopChunkPolling();
+        this.resetChunkTimer();
         this.form.sourceType = "FILE";
         this.form.url = "";
         this.form.chunkStrategy = "fixed_size";
@@ -391,6 +427,3 @@
 </script>
 </body>
 </html>
-
-
-

@@ -31,6 +31,7 @@ def test_knowledge_upload_page_is_served() -> None:
     assert "fixed_size" in response.text
     assert "structure_aware" in response.text
     assert "PENDING" in response.text
+    assert "<span>文档管理</span>" in response.text
 
 
 def test_chunk_strategy_must_be_known() -> None:
@@ -97,6 +98,7 @@ def test_knowledge_base_create_page_is_served() -> None:
     assert "/v1/knowledge-bases" in response.text
     assert "collectionName" in response.text
     assert "embeddingModel" in response.text
+    assert "<span>文档管理</span>" in response.text
 
 
 def test_create_knowledge_base_builds_database_record() -> None:

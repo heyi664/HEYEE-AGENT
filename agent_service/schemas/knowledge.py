@@ -111,3 +111,46 @@ class KnowledgeDocumentChunkStatusResponse(BaseModel):
     persistDuration: int | None = None
     logCreateTime: str | None = None
     logEndTime: str | None = None
+
+class KnowledgeDocumentListResponse(BaseModel):
+    id: str
+    knowledgeBaseId: str
+    knowledgeBaseName: str | None = None
+    docName: str
+    enabled: bool
+    status: str
+    chunkCount: int = 0
+    fileUrl: str | None = None
+    fileType: str | None = None
+    fileSize: int = 0
+    sourceType: str | None = None
+    sourceLocation: str | None = None
+    chunkStrategy: str
+    chunkConfig: dict[str, Any]
+    createTime: str | None = None
+    updateTime: str | None = None
+
+
+class KnowledgeDocumentUpdateRequest(BaseModel):
+    docName: str = Field(min_length=1, max_length=255)
+    chunkStrategy: str = Field(min_length=1)
+    chunkConfig: str = Field(min_length=2)
+
+    @field_validator("docName", "chunkStrategy", "chunkConfig")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("field must not be blank")
+        return value
+
+
+class KnowledgeDocumentMutationResponse(BaseModel):
+    id: str
+    success: bool = True
+
+
+class KnowledgeDocumentEnableResponse(BaseModel):
+    id: str
+    enabled: bool
+    success: bool = True

@@ -124,6 +124,9 @@
       goChat() {
         location.href = "/ui/chat.html";
       },
+      goDocs() {
+        location.href = "/ui/knowledge-documents.html";
+      },
       validateForm() {
         if (!this.form.name.trim()) return "请输入知识库名称";
         if (!this.form.embeddingModel.trim()) return "请输入嵌入模型";

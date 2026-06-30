@@ -22,14 +22,19 @@ from agent_service.repositories.knowledge_repository import (
     KnowledgeDocumentRecord,
     KnowledgeRepository,
 )
+from agent_service.schemas.chunking import TextChunk
 from agent_service.schemas.knowledge import (
     ALLOWED_CHUNK_STRATEGIES,
     KnowledgeBaseCreateResponse,
     KnowledgeBaseSummary,
     KnowledgeDocumentChunkStartResponse,
     KnowledgeDocumentChunkStatusResponse,
+    KnowledgeDocumentEnableResponse,
+    KnowledgeDocumentListResponse,
+    KnowledgeDocumentMutationResponse,
     KnowledgeDocumentUploadResult,
 )
+from agent_service.services.embedding_service import EmbeddingService
 from agent_service.services.object_storage_service import ObjectStorageService, StoredObject
 from agent_service.services.rocketmq_transaction_producer import (
     TransactionMessageProducer,
@@ -49,10 +54,36 @@ class KnowledgeDocumentService:
         repository: KnowledgeRepository | None = None,
         storage: ObjectStorageService | None = None,
         chunk_producer: TransactionMessageProducer | None = None,
+        embedding_service: EmbeddingService | None = None,
     ) -> None:
         self.repository = repository or KnowledgeRepository()
         self.storage = storage or ObjectStorageService()
         self.chunk_producer = chunk_producer or get_rocketmq_transaction_producer()
+        self.embedding_service = embedding_service or EmbeddingService()
+
+
+    def list_documents(self) -> list[KnowledgeDocumentListResponse]:
+        return [
+            KnowledgeDocumentListResponse(
+                id=record.id,
+                knowledgeBaseId=record.kb_id,
+                knowledgeBaseName=record.knowledge_base_name,
+                docName=record.doc_name,
+                enabled=record.enabled,
+                status=record.status,
+                chunkCount=record.chunk_count,
+                fileUrl=record.file_url,
+                fileType=record.file_type,
+                fileSize=record.file_size,
+                sourceType=record.source_type,
+                sourceLocation=record.source_location,
+                chunkStrategy=record.chunk_strategy,
+                chunkConfig=record.chunk_config,
+                createTime=record.create_time,
+                updateTime=record.update_time,
+            )
+            for record in self.repository.list_documents()
+        ]
 
     def list_knowledge_bases(self) -> list[KnowledgeBaseSummary]:
         return self.repository.list_knowledge_bases()
@@ -182,7 +213,10 @@ class KnowledgeDocumentService:
                 updated_by=settings.upload_created_by,
             )
             if target is None:
-                raise HTTPException(status_code=409, detail="document not found or current status cannot start chunking")
+                raise HTTPException(
+                    status_code=409,
+                    detail="document not found or current status cannot start chunking",
+                )
             transaction_state["target"] = target
             return target
 
@@ -226,6 +260,85 @@ class KnowledgeDocumentService:
             logCreateTime=record.log_create_time,
             logEndTime=record.log_end_time,
         )
+
+    def update_document_config(
+        self,
+        document_id: str,
+        *,
+        doc_name: str,
+        chunk_strategy: str,
+        chunk_config: str,
+    ) -> KnowledgeDocumentMutationResponse:
+        document = self._get_document_or_404(document_id)
+        self._reject_running_document(document.status)
+        doc_name = doc_name.strip()
+        if not doc_name:
+            raise HTTPException(status_code=400, detail="docName is required")
+        chunk_options = self._resolve_chunk_options(chunk_strategy, chunk_config)
+        settings = get_settings()
+        self.repository.update_document_config(
+            doc_id=document.id,
+            doc_name=doc_name,
+            chunk_strategy=chunk_options.strategy,
+            chunk_config=chunk_options.config,
+            updated_by=settings.upload_created_by,
+        )
+        return KnowledgeDocumentMutationResponse(id=document.id)
+
+    def delete_document(self, document_id: str) -> KnowledgeDocumentMutationResponse:
+        document = self._get_document_or_404(document_id)
+        self._reject_running_document(document.status)
+        settings = get_settings()
+        self.repository.delete_document_atomic(
+            doc_id=document.id,
+            updated_by=settings.upload_created_by,
+        )
+        self.storage.delete_file_url(
+            document.file_url,
+            bucket_name=document.collection_name or document.kb_id,
+        )
+        return KnowledgeDocumentMutationResponse(id=document.id)
+
+    async def set_document_enabled(
+        self,
+        document_id: str,
+        enabled: bool,
+    ) -> KnowledgeDocumentEnableResponse:
+        document = self._get_document_or_404(document_id)
+        self._reject_running_document(document.status)
+        if document.enabled is enabled:
+            return KnowledgeDocumentEnableResponse(id=document.id, enabled=enabled)
+
+        vectors = []
+        if enabled:
+            chunk_sources = self.repository.list_vector_chunk_sources(document.id)
+            if chunk_sources:
+                text_chunks = [
+                    TextChunk(
+                        chunk_id=chunk.chunk_id,
+                        chunk_index=chunk.chunk_index,
+                        content=chunk.content,
+                        content_hash=chunk.content_hash,
+                        char_count=chunk.char_count,
+                        token_count=chunk.token_count,
+                        metadata={"docId": chunk.doc_id, "chunkIndex": chunk.chunk_index},
+                    )
+                    for chunk in chunk_sources
+                ]
+                vectors = await self.embedding_service.embed_chunks(
+                    doc_id=document.id,
+                    kb_id=document.kb_id,
+                    chunks=text_chunks,
+                )
+
+        settings = get_settings()
+        self.repository.set_document_enabled_atomic(
+            doc_id=document.id,
+            enabled=enabled,
+            vectors=vectors,
+            updated_by=settings.upload_created_by,
+        )
+        return KnowledgeDocumentEnableResponse(id=document.id, enabled=enabled)
     def _build_chunk_message(self, target: KnowledgeDocumentChunkTarget) -> dict[str, object]:
         return {
             "docId": target.id,
@@ -240,6 +353,19 @@ class KnowledgeDocumentService:
             "chunkConfig": target.chunk_config,
             "status": target.status,
         }
+
+    def _get_document_or_404(self, document_id: str):
+        document_id = document_id.strip()
+        if not document_id:
+            raise HTTPException(status_code=400, detail="document id is required")
+        document = self.repository.find_document_detail(document_id)
+        if document is None:
+            raise HTTPException(status_code=404, detail="document not found")
+        return document
+
+    def _reject_running_document(self, status: str) -> None:
+        if status == "RUNNING":
+            raise HTTPException(status_code=409, detail="document is running")
     def _get_knowledge_base_or_404(self, name: str) -> KnowledgeBaseSummary:
         kb = self.repository.find_knowledge_base_by_name(name.strip())
         if kb is None:
@@ -266,14 +392,20 @@ class KnowledgeDocumentService:
         numeric_fields = ["targetChars", "maxChars", "minChars", "overlapChars"]
         for field in numeric_fields:
             if field in config and not isinstance(config[field], int):
-                raise HTTPException(status_code=400, detail=f"chunkConfig.{field} must be an integer")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"chunkConfig.{field} must be an integer",
+                )
 
         target = config.get("targetChars")
         max_chars = config.get("maxChars")
         min_chars = config.get("minChars")
         overlap = config.get("overlapChars")
         if isinstance(target, int) and target <= 0:
-            raise HTTPException(status_code=400, detail="chunkConfig.targetChars must be greater than 0")
+            raise HTTPException(
+                status_code=400,
+                detail="chunkConfig.targetChars must be greater than 0",
+            )
         if isinstance(max_chars, int) and isinstance(target, int) and max_chars < target:
             raise HTTPException(
                 status_code=400,
@@ -285,7 +417,10 @@ class KnowledgeDocumentService:
                 detail="chunkConfig.minChars must be less than or equal to targetChars",
             )
         if isinstance(overlap, int) and overlap < 0:
-            raise HTTPException(status_code=400, detail="chunkConfig.overlapChars cannot be negative")
+            raise HTTPException(
+                status_code=400,
+                detail="chunkConfig.overlapChars cannot be negative",
+            )
 
     def _validate_remote_url(self, url: str) -> None:
         parsed = urlparse(url)
@@ -295,7 +430,10 @@ class KnowledgeDocumentService:
             for info in socket.getaddrinfo(parsed.hostname, parsed.port or 443):
                 address = ip_address(info[4][0])
                 if address.is_private or address.is_loopback or address.is_link_local:
-                    raise HTTPException(status_code=400, detail="URL cannot point to a private network address")
+                    raise HTTPException(
+                        status_code=400,
+                        detail="URL cannot point to a private network address",
+                    )
         except HTTPException:
             raise
         except OSError as exc:
@@ -333,7 +471,10 @@ class KnowledgeDocumentService:
                         async for chunk in response.aiter_bytes(1024 * 1024):
                             bytes_written += len(chunk)
                             if bytes_written > max_bytes:
-                                raise HTTPException(status_code=400, detail="remote file exceeds max size")
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail="remote file exceeds max size",
+                                )
                             temp.write(chunk)
             except Exception:
                 temp_path.unlink(missing_ok=True)

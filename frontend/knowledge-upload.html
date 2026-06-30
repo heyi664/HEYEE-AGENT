@@ -211,6 +211,9 @@
       goChat() {
         location.href = "/ui/chat.html";
       },
+      goDocs() {
+        location.href = "/ui/knowledge-documents.html";
+      },
       loadKnowledgeBases() {
         this.loadingBases = true;
         axios.get("/v1/knowledge-bases").then(({data}) => {

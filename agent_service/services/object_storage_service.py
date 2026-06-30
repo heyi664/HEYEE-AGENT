@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import httpx
 
@@ -99,6 +99,17 @@ class ObjectStorageService:
             return body.read()
         finally:
             body.close()
+
+    def delete_file_url(self, file_url: str, bucket_name: str | None = None) -> None:
+        parsed = urlparse(file_url)
+        if parsed.scheme == "s3":
+            bucket_name, object_key = _parse_s3_file_url(file_url)
+        elif bucket_name:
+            object_key = unquote(parsed.path.lstrip("/"))
+        else:
+            raise ValueError("bucket_name is required when fileUrl is not an s3 URL")
+        client = self._create_s3_client()
+        client.delete_object(Bucket=bucket_name, Key=object_key)
     def ensure_bucket(self, bucket_name: str) -> None:
         client = self._create_s3_client()
         try:

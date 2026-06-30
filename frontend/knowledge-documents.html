@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>文档管理</title>
+  <link rel="stylesheet" href="./css/element.css">
+  <link rel="stylesheet" href="./css/main.css">
+  <link rel="stylesheet" href="./css/knowledge-upload.css?v=20260627">
+  <link rel="stylesheet" href="./css/knowledge-documents.css?v=20260630">
+</head>
+<body>
+<div id="app">
+  <div class="kb-page">
+    <aside class="kb-sidebar">
+      <div class="brand-block">
+        <div class="brand-mark">H</div>
+        <div>
+          <div class="brand-title">HYEEE AI</div>
+          <div class="brand-subtitle">知识库管理</div>
+        </div>
+      </div>
+      <button class="side-link active" type="button">
+        <i class="el-icon-document"></i>
+        <span>文档管理</span>
+      </button>
+      <button class="side-link" type="button" @click="goUpload">
+        <i class="el-icon-upload2"></i>
+        <span>上传文件</span>
+      </button>
+      <button class="side-link" type="button" @click="goCreate">
+        <i class="el-icon-folder-add"></i>
+        <span>创建知识库</span>
+      </button>
+      <button class="side-link" type="button" @click="goChat">
+        <i class="el-icon-chat-line-round"></i>
+        <span>返回聊天</span>
+      </button>
+    </aside>
+
+    <main class="kb-main">
+      <header class="kb-header">
+        <div>
+          <div class="header-title">文档管理</div>
+          <div class="header-subtitle">查看所有知识库文档，并执行删除、更新、禁用和启用操作</div>
+        </div>
+        <div class="doc-toolbar">
+          <button class="reset-btn" type="button" @click="goUpload">
+            <i class="el-icon-upload2"></i>
+            <span>上传</span>
+          </button>
+          <button class="submit-btn compact" type="button" :disabled="loading" @click="loadDocuments">
+            <i class="el-icon-refresh"></i>
+            <span>{{loading ? "刷新中" : "刷新"}}</span>
+          </button>
+        </div>
+      </header>
+
+      <section class="doc-content">
+        <div class="doc-panel">
+          <div class="doc-panel-head">
+            <div>
+              <div class="panel-title">文档列表</div>
+              <div class="doc-count">共 {{documents.length}} 条</div>
+            </div>
+            <el-input
+              class="doc-search"
+              v-model="keyword"
+              clearable
+              prefix-icon="el-icon-search"
+              placeholder="搜索文档名、知识库、状态">
+            </el-input>
+          </div>
+
+          <el-table
+            v-loading="loading"
+            :data="filteredDocuments"
+            border
+            stripe
+            height="calc(100vh - 205px)"
+            empty-text="暂无文档">
+            <el-table-column prop="docName" label="文档名称" min-width="210" show-overflow-tooltip></el-table-column>
+            <el-table-column prop="knowledgeBaseName" label="知识库" min-width="150" show-overflow-tooltip></el-table-column>
+            <el-table-column prop="fileType" label="类型" width="90"></el-table-column>
+            <el-table-column prop="sourceType" label="来源" width="90"></el-table-column>
+            <el-table-column label="状态" width="110">
+              <template slot-scope="scope">
+                <el-tag size="mini" :type="statusTagType(scope.row.status)">{{scope.row.status}}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="启用" width="90">
+              <template slot-scope="scope">
+                <el-tag size="mini" :type="scope.row.enabled ? 'success' : 'info'">
+                  {{scope.row.enabled ? "启用" : "禁用"}}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="chunkCount" label="分块" width="80"></el-table-column>
+            <el-table-column label="大小" width="100">
+              <template slot-scope="scope">{{formatBytes(scope.row.fileSize || 0)}}</template>
+            </el-table-column>
+            <el-table-column prop="chunkStrategy" label="分块策略" min-width="135" show-overflow-tooltip></el-table-column>
+            <el-table-column prop="updateTime" label="更新时间" min-width="170" show-overflow-tooltip></el-table-column>
+            <el-table-column label="操作" width="310" fixed="right">
+              <template slot-scope="scope">
+                <div class="row-actions">
+                  <el-button size="mini" type="danger" plain @click="deleteDocument(scope.row)">删除</el-button>
+                  <el-button size="mini" type="primary" plain @click="openUpdateDialog(scope.row)">更新</el-button>
+                  <el-button
+                    size="mini"
+                    type="warning"
+                    plain
+                    :disabled="scope.row.enabled === false"
+                    @click="disableDocument(scope.row)">
+                    禁用
+                  </el-button>
+                  <el-button
+                    size="mini"
+                    type="success"
+                    plain
+                    :disabled="scope.row.enabled === true"
+                    @click="enableDocument(scope.row)">
+                    启用
+                  </el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <el-dialog title="更新文档配置" :visible.sync="updateDialogVisible" width="620px">
+    <el-form label-position="top">
+      <el-form-item label="文档名称">
+        <el-input v-model="updateForm.docName" maxlength="255"></el-input>
+      </el-form-item>
+      <el-form-item label="分块策略">
+        <el-select v-model="updateForm.chunkStrategy">
+          <el-option label="固定大小 fixed_size" value="fixed_size"></el-option>
+          <el-option label="结构感知 structure_aware" value="structure_aware"></el-option>
+        </el-select>
+      </el-form-item>
+      <el-form-item label="分块参数">
+        <el-input type="textarea" resize="none" :autosize="{ minRows: 6, maxRows: 10 }" v-model="updateForm.chunkConfig"></el-input>
+      </el-form-item>
+    </el-form>
+    <span slot="footer" class="dialog-footer">
+      <el-button @click="updateDialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="updating" @click="updateDocument">保存</el-button>
+    </span>
+  </el-dialog>
+</div>
+<script src="./js/vue.js"></script>
+<script src="./js/axios.min.js"></script>
+<script src="./js/element.js"></script>
+<script>
+  axios.defaults.timeout = 60000;
+
+  new Vue({
+    el: "#app",
+    data: {
+      loading: false,
+      updating: false,
+      keyword: "",
+      documents: [],
+      updateDialogVisible: false,
+      editingDocument: null,
+      updateForm: {
+        docName: "",
+        chunkStrategy: "fixed_size",
+        chunkConfig: "{}"
+      }
+    },
+    created() {
+      this.loadDocuments();
+    },
+    computed: {
+      filteredDocuments() {
+        const word = this.keyword.trim().toLowerCase();
+        if (!word) return this.documents;
+        return this.documents.filter(item => {
+          return [item.docName, item.knowledgeBaseName, item.status, item.fileType, item.sourceType]
+            .filter(Boolean)
+            .some(value => String(value).toLowerCase().includes(word));
+        });
+      }
+    },
+    methods: {
+      goUpload() {
+        location.href = "/ui/knowledge-upload.html";
+      },
+      goCreate() {
+        location.href = "/ui/knowledge-base.html";
+      },
+      goChat() {
+        location.href = "/ui/chat.html";
+      },
+      loadDocuments() {
+        this.loading = true;
+        axios.get("/v1/knowledge-base/docs").then(({data}) => {
+          this.documents = Array.isArray(data) ? data : [];
+        }).catch(err => {
+          this.$message.error(this.readError(err));
+        }).finally(() => {
+          this.loading = false;
+        });
+      },
+      deleteDocument(row) {
+        this.$confirm("确认删除文档「" + row.docName + "」？", "删除文档", { type: "warning" }).then(() => {
+          return axios.delete(this.docUrl(row.id));
+        }).then(() => {
+          this.$message.success("文档已删除");
+          this.loadDocuments();
+        }).catch(err => {
+          if (err !== "cancel") this.$message.error(this.readError(err));
+        });
+      },
+      openUpdateDialog(row) {
+        this.editingDocument = row;
+        this.updateForm.docName = row.docName || "";
+        this.updateForm.chunkStrategy = row.chunkStrategy || "fixed_size";
+        this.updateForm.chunkConfig = JSON.stringify(row.chunkConfig || {}, null, 2);
+        this.updateDialogVisible = true;
+      },
+      updateDocument() {
+        if (!this.editingDocument) return;
+        if (!this.updateForm.docName.trim()) {
+          this.$message.warning("文档名称不能为空");
+          return;
+        }
+        try {
+          JSON.parse(this.updateForm.chunkConfig);
+        } catch (e) {
+          this.$message.warning("分块参数必须是合法 JSON");
+          return;
+        }
+        this.updating = true;
+        axios.put(this.docUrl(this.editingDocument.id), {
+          docName: this.updateForm.docName.trim(),
+          chunkStrategy: this.updateForm.chunkStrategy,
+          chunkConfig: this.updateForm.chunkConfig
+        }).then(() => {
+          this.$message.success("文档配置已更新");
+          this.updateDialogVisible = false;
+          this.loadDocuments();
+        }).catch(err => {
+          this.$message.error(this.readError(err));
+        }).finally(() => {
+          this.updating = false;
+        });
+      },
+      disableDocument(row) {
+        this.setDocumentEnabled(row, false);
+      },
+      enableDocument(row) {
+        this.setDocumentEnabled(row, true);
+      },
+      setDocumentEnabled(row, value) {
+        axios.patch(this.docUrl(row.id) + "/enable", null, { params: { value } }).then(() => {
+          this.$message.success(value ? "文档已启用" : "文档已禁用");
+          this.loadDocuments();
+        }).catch(err => {
+          this.$message.error(this.readError(err));
+        });
+      },
+      docUrl(id) {
+        return "/v1/knowledge-base/docs/" + encodeURIComponent(id);
+      },
+      statusTagType(status) {
+        const value = String(status || "").toUpperCase();
+        if (value === "SUCCESS") return "success";
+        if (value === "RUNNING") return "warning";
+        if (value === "FAILED") return "danger";
+        return "info";
+      },
+      formatBytes(value) {
+        const size = Number(value || 0);
+        if (size < 1024) return size + " B";
+        if (size < 1024 * 1024) return (size / 1024).toFixed(1) + " KB";
+        return (size / 1024 / 1024).toFixed(1) + " MB";
+      },
+      readError(err) {
+        return err && err.response && err.response.data && err.response.data.detail
+          ? err.response.data.detail
+          : String(err);
+      }
+    }
+  });
+</script>
+</body>
+</html>

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.datastructures import UploadFile
 
 from agent_service.schemas.knowledge import (
@@ -11,6 +11,10 @@ from agent_service.schemas.knowledge import (
     KnowledgeBaseSummary,
     KnowledgeDocumentChunkStartResponse,
     KnowledgeDocumentChunkStatusResponse,
+    KnowledgeDocumentEnableResponse,
+    KnowledgeDocumentListResponse,
+    KnowledgeDocumentMutationResponse,
+    KnowledgeDocumentUpdateRequest,
     KnowledgeDocumentUploadResult,
     KnowledgeDocumentUrlUploadRequest,
 )
@@ -61,6 +65,54 @@ def get_knowledge_document_chunk_status(
     service: KnowledgeDocumentService = Depends(get_knowledge_document_service),
 ) -> KnowledgeDocumentChunkStatusResponse:
     return service.get_chunk_status(document_id)
+
+
+
+
+@router.get("/knowledge-base/docs", response_model=list[KnowledgeDocumentListResponse])
+def list_knowledge_documents(
+    service: KnowledgeDocumentService = Depends(get_knowledge_document_service),
+) -> list[KnowledgeDocumentListResponse]:
+    return service.list_documents()
+
+@router.delete(
+    "/knowledge-base/docs/{document_id}",
+    response_model=KnowledgeDocumentMutationResponse,
+)
+def delete_knowledge_document(
+    document_id: str,
+    service: KnowledgeDocumentService = Depends(get_knowledge_document_service),
+) -> KnowledgeDocumentMutationResponse:
+    return service.delete_document(document_id)
+
+
+@router.put(
+    "/knowledge-base/docs/{document_id}",
+    response_model=KnowledgeDocumentMutationResponse,
+)
+def update_knowledge_document_config(
+    document_id: str,
+    request: KnowledgeDocumentUpdateRequest,
+    service: KnowledgeDocumentService = Depends(get_knowledge_document_service),
+) -> KnowledgeDocumentMutationResponse:
+    return service.update_document_config(
+        document_id,
+        doc_name=request.docName,
+        chunk_strategy=request.chunkStrategy,
+        chunk_config=request.chunkConfig,
+    )
+
+
+@router.patch(
+    "/knowledge-base/docs/{document_id}/enable",
+    response_model=KnowledgeDocumentEnableResponse,
+)
+async def set_knowledge_document_enabled(
+    document_id: str,
+    value: bool = Query(...),
+    service: KnowledgeDocumentService = Depends(get_knowledge_document_service),
+) -> KnowledgeDocumentEnableResponse:
+    return await service.set_document_enabled(document_id, value)
 
 @router.post("/knowledge-documents/upload", response_model=KnowledgeDocumentUploadResult)
 async def upload_knowledge_document(

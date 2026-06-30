@@ -49,7 +49,7 @@
         <form class="upload-form" @submit.prevent="submitUpload">
           <div class="form-section">
             <div class="section-title">目标知识库</div>
-            <el-select v-model="form.knowledgeBase文档名称" filterable placeholder="请选择知识库" :loading="loadingBases">
+            <el-select v-model="form.knowledgeBaseName" filterable placeholder="请选择知识库" :loading="loadingBases">
               <el-option v-for="item in knowledgeBases" :key="item.id" :label="item.name" :value="item.name"></el-option>
             </el-select>
           </div>
@@ -92,24 +92,24 @@
 
           <div v-if="chunkMessage" class="chunk-status success">{{chunkMessage}}</div>
           <div v-if="chunkErrorMessage" class="chunk-status error">{{chunkErrorMessage}}</div>
-          <div v-if="chunk状态" class="chunk-progress">
+          <div v-if="chunkStatus" class="chunk-progress">
             <div class="chunk-progress-head">
               <span>分块状态</span>
               <strong>{{displayChunkPhase}}</strong>
             </div>
             <div class="chunk-progress-grid">
-              <div><span>文档</span><strong>{{chunk状态.status || "-"}}</strong></div>
-              <div><span>Log</span><strong>{{chunk状态.log状态 || "-"}}</strong></div>
-              <div><span>分块数</span><strong>{{chunk状态.chunkCount || 0}}</strong></div>
-              <div><span>总耗时</span><strong>{{formatDuration(chunk状态.totalDuration)}}</strong></div>
+              <div><span>文档</span><strong>{{chunkStatus.status || "-"}}</strong></div>
+              <div><span>Log</span><strong>{{chunkStatus.logStatus || "-"}}</strong></div>
+              <div><span>分块数</span><strong>{{chunkStatus.chunkCount || 0}}</strong></div>
+              <div><span>总耗时</span><strong>{{formatDuration(chunkStatus.totalDuration)}}</strong></div>
             </div>
-            <div v-if="chunk状态.errorMessage" class="chunk-progress-error">{{chunk状态.errorMessage}}</div>
+            <div v-if="chunkStatus.errorMessage" class="chunk-progress-error">{{chunkStatus.errorMessage}}</div>
           </div>
 
           <div class="form-section split">
             <div>
               <div class="section-title">分块策略</div>
-              <el-select v-model="form.chunk分块策略" placeholder="请选择分块策略">
+              <el-select v-model="form.chunkStrategy" placeholder="请选择分块策略">
                 <el-option label="固定大小分块 fixed_size" value="fixed_size"></el-option>
                 <el-option label="结构感知分块 structure_aware" value="structure_aware"></el-option>
               </el-select>
@@ -145,11 +145,11 @@
           <div v-if="errorMessage" class="error-result">{{errorMessage}}</div>
           <div v-if="result" class="result-list">
             <div class="result-row"><span>文档 ID</span><strong>{{result.id}}</strong></div>
-            <div class="result-row"><span>文档名称</span><strong>{{result.doc文档名称}}</strong></div>
+            <div class="result-row"><span>文档名称</span><strong>{{result.docName}}</strong></div>
             <div class="result-row"><span>状态</span><strong>{{result.status}}</strong></div>
             <div class="result-row"><span>分块数</span><strong>{{result.chunkCount || 0}}</strong></div>
             <div class="result-row"><span>来源</span><strong>{{result.sourceType}}</strong></div>
-            <div class="result-row"><span>分块策略</span><strong>{{result.chunk分块策略}}</strong></div>
+            <div class="result-row"><span>分块策略</span><strong>{{result.chunkStrategy}}</strong></div>
             <div class="result-row wide"><span>对象地址</span><strong>{{result.fileUrl}}</strong></div>
           </div>
         </aside>
@@ -175,15 +175,15 @@
       errorMessage: "",
       chunkMessage: "",
       chunkErrorMessage: "",
-      chunk状态: null,
+      chunkStatus: null,
       chunkPolling: false,
       chunkPollTimer: null,
       chunkPollFailures: 0,
       form: {
-        knowledgeBase文档名称: "",
+        knowledgeBaseName: "",
         sourceType: "FILE",
         url: "",
-        chunk分块策略: "fixed_size",
+        chunkStrategy: "fixed_size",
         chunkConfig: JSON.stringify({ targetChars: 1400, maxChars: 1800, minChars: 600, overlapChars: 0 }, null, 2)
       }
     },
@@ -195,8 +195,8 @@
     },
     computed: {
       displayChunkPhase() {
-        if (!this.chunk状态) return "-";
-        return this.chunk状态.log状态 || this.chunk状态.status || "-";
+        if (!this.chunkStatus) return "-";
+        return this.chunkStatus.logStatus || this.chunkStatus.status || "-";
       }
     },
     methods: {
@@ -220,8 +220,8 @@
         this.selectedFile = event.target.files && event.target.files[0] ? event.target.files[0] : null;
       },
       validateForm() {
-        if (!this.form.knowledgeBase文档名称) return "请选择知识库";
-        if (!this.form.chunk分块策略) return "请选择分块策略";
+        if (!this.form.knowledgeBaseName) return "请选择知识库";
+        if (!this.form.chunkStrategy) return "请选择分块策略";
         try {
           JSON.parse(this.form.chunkConfig);
         } catch (e) {
@@ -242,12 +242,12 @@
         this.errorMessage = "";
         this.chunkMessage = "";
         this.chunkErrorMessage = "";
-        this.chunk状态 = null;
+        this.chunkStatus = null;
         this.stopChunkPolling();
         const request = this.form.sourceType === "FILE" ? this.buildFileRequest() : this.buildUrlRequest();
         axios.post("/v1/knowledge-documents/upload", request.body, request.config).then(({data}) => {
           this.result = data;
-          this.$message.success("文档 uploaded. 状态 is PENDING.");
+          this.$message.success("文件已上传，状态为 PENDING");
         }).catch(err => {
           this.errorMessage = this.readError(err);
           this.$message.error(this.errorMessage);
@@ -257,9 +257,9 @@
       },
       buildFileRequest() {
         const body = new FormData();
-        body.append("knowledgeBase文档名称", this.form.knowledgeBase文档名称);
+        body.append("knowledgeBaseName", this.form.knowledgeBaseName);
         body.append("sourceType", "FILE");
-        body.append("chunk分块策略", this.form.chunk分块策略);
+        body.append("chunkStrategy", this.form.chunkStrategy);
         body.append("chunkConfig", this.form.chunkConfig);
         body.append("file", this.selectedFile);
         return { body, config: { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 } };
@@ -267,10 +267,10 @@
       buildUrlRequest() {
         return {
           body: {
-            knowledgeBase文档名称: this.form.knowledgeBase文档名称,
+            knowledgeBaseName: this.form.knowledgeBaseName,
             sourceType: "URL",
             url: this.form.url.trim(),
-            chunk分块策略: this.form.chunk分块策略,
+            chunkStrategy: this.form.chunkStrategy,
             chunkConfig: this.form.chunkConfig,
             scheduleEnabled: false,
             scheduleCron: null
@@ -286,7 +286,7 @@
         this.chunking = true;
         this.chunkMessage = "";
         this.chunkErrorMessage = "";
-        this.chunk状态 = null;
+        this.chunkStatus = null;
         this.stopChunkPolling();
         axios.post(this.buildStartChunkUrl(this.result.id), null, { timeout: 120000 }).then(({data}) => {
           if (data && typeof data === "object") {
@@ -294,7 +294,7 @@
           }
           this.chunkMessage = "分块任务已提交，等待处理结果...";
           this.$message.success(this.chunkMessage);
-          this.fetchChunk状态();
+          this.fetchChunkStatus();
           this.startChunkPolling();
         }).catch(err => {
           this.stopChunkPolling();
@@ -307,7 +307,7 @@
       buildStartChunkUrl(documentId) {
         return "/v1/knowledge-documents/" + encodeURIComponent(documentId) + "/chunks/start";
       },
-      buildChunk状态Url(documentId) {
+      buildChunkStatusUrl(documentId) {
         return "/v1/knowledge-documents/" + encodeURIComponent(documentId) + "/chunks/status";
       },
       startChunkPolling() {
@@ -315,7 +315,7 @@
         this.chunkPolling = true;
         this.chunkPollFailures = 0;
         this.chunkPollTimer = setInterval(() => {
-          this.fetchChunk状态();
+          this.fetchChunkStatus();
         }, 2000);
       },
       stopChunkPolling() {
@@ -325,25 +325,25 @@
         }
         this.chunkPolling = false;
       },
-      fetchChunk状态() {
+      fetchChunkStatus() {
         if (!this.result || !this.result.id) return;
-        axios.get(this.buildChunk状态Url(this.result.id), { timeout: 30000 }).then(({data}) => {
+        axios.get(this.buildChunkStatusUrl(this.result.id), { timeout: 30000 }).then(({data}) => {
           this.chunkPollFailures = 0;
-          this.chunk状态 = data;
+          this.chunkStatus = data;
           if (data && typeof data === "object") {
             this.result = Object.assign({}, this.result, {
               status: data.status || this.result.status,
               chunkCount: data.chunkCount || 0
             });
           }
-          const doc状态 = String(data && data.status || "").toUpperCase();
-          const log状态 = String(data && data.log状态 || "").toUpperCase();
-          const final状态 = log状态 || doc状态;
-          if (final状态 === "SUCCESS") {
+          const docStatus = String(data && data.status || "").toUpperCase();
+          const logStatus = String(data && data.logStatus || "").toUpperCase();
+          const finalStatus = logStatus || docStatus;
+          if (finalStatus === "SUCCESS") {
             this.stopChunkPolling();
             this.chunkMessage = "分块完成";
             this.chunkErrorMessage = "";
-          } else if (final状态 === "FAILED") {
+          } else if (finalStatus === "FAILED") {
             this.stopChunkPolling();
             this.chunkErrorMessage = data.errorMessage || "分块失败";
           }
@@ -361,11 +361,11 @@
         this.errorMessage = "";
         this.chunkMessage = "";
         this.chunkErrorMessage = "";
-        this.chunk状态 = null;
+        this.chunkStatus = null;
         this.stopChunkPolling();
         this.form.sourceType = "FILE";
         this.form.url = "";
-        this.form.chunk分块策略 = "fixed_size";
+        this.form.chunkStrategy = "fixed_size";
         this.form.chunkConfig = JSON.stringify({ targetChars: 1400, maxChars: 1800, minChars: 600, overlapChars: 0 }, null, 2);
         if (this.$refs.fileInput) this.$refs.fileInput.value = "";
       },
@@ -391,5 +391,6 @@
 </script>
 </body>
 </html>
+
 
 

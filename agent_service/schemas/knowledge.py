@@ -93,3 +93,21 @@ class KnowledgeDocumentChunkStartResponse(BaseModel):
     knowledgeBaseId: str
     status: str
     messageId: str | None = None
+
+
+class KnowledgeDocumentChunkStatusResponse(BaseModel):
+    id: str
+    knowledgeBaseId: str
+    docName: str
+    status: str
+    chunkCount: int = 0
+    logStatus: str | None = None
+    messageId: str | None = None
+    errorMessage: str | None = None
+    totalDuration: int | None = None
+    extractDuration: int | None = None
+    chunkDuration: int | None = None
+    embedDuration: int | None = None
+    persistDuration: int | None = None
+    logCreateTime: str | None = None
+    logEndTime: str | None = None

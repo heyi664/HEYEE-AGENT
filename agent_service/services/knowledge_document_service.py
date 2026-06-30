@@ -27,6 +27,7 @@ from agent_service.schemas.knowledge import (
     KnowledgeBaseCreateResponse,
     KnowledgeBaseSummary,
     KnowledgeDocumentChunkStartResponse,
+    KnowledgeDocumentChunkStatusResponse,
     KnowledgeDocumentUploadResult,
 )
 from agent_service.services.object_storage_service import ObjectStorageService, StoredObject
@@ -181,7 +182,7 @@ class KnowledgeDocumentService:
                 updated_by=settings.upload_created_by,
             )
             if target is None:
-                raise HTTPException(status_code=409, detail="文档不存在或当前状态不允许开始分块")
+                raise HTTPException(status_code=409, detail="document not found or current status cannot start chunking")
             transaction_state["target"] = target
             return target
 
@@ -200,6 +201,31 @@ class KnowledgeDocumentService:
             messageId=result.message_id,
         )
 
+
+    def get_chunk_status(self, document_id: str) -> KnowledgeDocumentChunkStatusResponse:
+        document_id = document_id.strip()
+        if not document_id:
+            raise HTTPException(status_code=400, detail="document id is required")
+        record = self.repository.find_document_chunk_status(document_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="document not found")
+        return KnowledgeDocumentChunkStatusResponse(
+            id=record.id,
+            knowledgeBaseId=record.kb_id,
+            docName=record.doc_name,
+            status=record.status,
+            chunkCount=record.chunk_count,
+            logStatus=record.log_status,
+            messageId=record.message_id,
+            errorMessage=record.error_message,
+            totalDuration=record.total_duration,
+            extractDuration=record.extract_duration,
+            chunkDuration=record.chunk_duration,
+            embedDuration=record.embed_duration,
+            persistDuration=record.persist_duration,
+            logCreateTime=record.log_create_time,
+            logEndTime=record.log_end_time,
+        )
     def _build_chunk_message(self, target: KnowledgeDocumentChunkTarget) -> dict[str, object]:
         return {
             "docId": target.id,
@@ -217,22 +243,22 @@ class KnowledgeDocumentService:
     def _get_knowledge_base_or_404(self, name: str) -> KnowledgeBaseSummary:
         kb = self.repository.find_knowledge_base_by_name(name.strip())
         if kb is None:
-            raise HTTPException(status_code=404, detail="知识库不存在")
+            raise HTTPException(status_code=404, detail="knowledge base not found")
         return kb
 
     def _resolve_chunk_options(self, strategy: str, config_text: str) -> ChunkOptions:
         strategy = strategy.strip()
         if strategy not in ALLOWED_CHUNK_STRATEGIES:
-            raise HTTPException(status_code=400, detail=f"非法分块策略: {strategy}")
+            raise HTTPException(status_code=400, detail=f"invalid chunk strategy: {strategy}")
         try:
             config = json.loads(config_text)
         except json.JSONDecodeError as exc:
             raise HTTPException(
                 status_code=400,
-                detail="chunkConfig 必须是合法 JSON 字符串",
+                detail="chunkConfig must be a valid JSON string",
             ) from exc
         if not isinstance(config, dict):
-            raise HTTPException(status_code=400, detail="chunkConfig 必须是 JSON 对象")
+            raise HTTPException(status_code=400, detail="chunkConfig must be a JSON object")
         self._validate_chunk_config(config)
         return ChunkOptions(strategy=strategy, config=config)
 
@@ -240,40 +266,40 @@ class KnowledgeDocumentService:
         numeric_fields = ["targetChars", "maxChars", "minChars", "overlapChars"]
         for field in numeric_fields:
             if field in config and not isinstance(config[field], int):
-                raise HTTPException(status_code=400, detail=f"chunkConfig.{field} 必须是整数")
+                raise HTTPException(status_code=400, detail=f"chunkConfig.{field} must be an integer")
 
         target = config.get("targetChars")
         max_chars = config.get("maxChars")
         min_chars = config.get("minChars")
         overlap = config.get("overlapChars")
         if isinstance(target, int) and target <= 0:
-            raise HTTPException(status_code=400, detail="chunkConfig.targetChars 必须大于 0")
+            raise HTTPException(status_code=400, detail="chunkConfig.targetChars must be greater than 0")
         if isinstance(max_chars, int) and isinstance(target, int) and max_chars < target:
             raise HTTPException(
                 status_code=400,
-                detail="chunkConfig.maxChars 必须大于等于 targetChars",
+                detail="chunkConfig.maxChars must be greater than or equal to targetChars",
             )
         if isinstance(min_chars, int) and isinstance(target, int) and min_chars > target:
             raise HTTPException(
                 status_code=400,
-                detail="chunkConfig.minChars 必须小于等于 targetChars",
+                detail="chunkConfig.minChars must be less than or equal to targetChars",
             )
         if isinstance(overlap, int) and overlap < 0:
-            raise HTTPException(status_code=400, detail="chunkConfig.overlapChars 不能为负数")
+            raise HTTPException(status_code=400, detail="chunkConfig.overlapChars cannot be negative")
 
     def _validate_remote_url(self, url: str) -> None:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise HTTPException(status_code=400, detail="URL 只支持 http/https")
+            raise HTTPException(status_code=400, detail="URL only supports http/https")
         try:
             for info in socket.getaddrinfo(parsed.hostname, parsed.port or 443):
                 address = ip_address(info[4][0])
                 if address.is_private or address.is_loopback or address.is_link_local:
-                    raise HTTPException(status_code=400, detail="URL 不允许指向内网地址")
+                    raise HTTPException(status_code=400, detail="URL cannot point to a private network address")
         except HTTPException:
             raise
         except OSError as exc:
-            raise HTTPException(status_code=400, detail="URL 域名无法解析") from exc
+            raise HTTPException(status_code=400, detail="URL hostname cannot be resolved") from exc
 
     async def _download_remote_file(self, url: str) -> DownloadedFile:
         settings = get_settings()
@@ -307,7 +333,7 @@ class KnowledgeDocumentService:
                         async for chunk in response.aiter_bytes(1024 * 1024):
                             bytes_written += len(chunk)
                             if bytes_written > max_bytes:
-                                raise HTTPException(status_code=400, detail="远程文件超过最大限制")
+                                raise HTTPException(status_code=400, detail="remote file exceeds max size")
                             temp.write(chunk)
             except Exception:
                 temp_path.unlink(missing_ok=True)

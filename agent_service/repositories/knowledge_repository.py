@@ -46,6 +46,24 @@ class KnowledgeDocumentChunkTarget:
     status: str
 
 
+@dataclass(frozen=True)
+class KnowledgeDocumentChunkStatusRecord:
+    id: str
+    kb_id: str
+    doc_name: str
+    status: str
+    chunk_count: int
+    log_status: str | None
+    message_id: str | None
+    error_message: str | None
+    total_duration: int | None
+    extract_duration: int | None
+    chunk_duration: int | None
+    embed_duration: int | None
+    persist_duration: int | None
+    log_create_time: str | None
+    log_end_time: str | None
+
 class KnowledgeRepository:
     def list_knowledge_bases(self) -> list[KnowledgeBaseSummary]:
         from sqlalchemy import text
@@ -240,6 +258,78 @@ class KnowledgeRepository:
                 },
             )
 
+
+    def find_document_chunk_status(self, doc_id: str) -> KnowledgeDocumentChunkStatusRecord | None:
+        from sqlalchemy import text
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            row = (
+                conn.execute(
+                    text(
+                        """
+                        SELECT
+                            d.id,
+                            d.kb_id,
+                            d.doc_name,
+                            d.status,
+                            d.chunk_count,
+                            l.status AS log_status,
+                            l.message_id,
+                            l.error_message,
+                            l.total_duration,
+                            l.extract_duration,
+                            l.chunk_duration,
+                            l.embed_duration,
+                            l.persist_duration,
+                            l.create_time AS log_create_time,
+                            l.end_time AS log_end_time
+                        FROM t_knowledge_document d
+                        LEFT JOIN LATERAL (
+                            SELECT
+                                status,
+                                message_id,
+                                error_message,
+                                total_duration,
+                                extract_duration,
+                                chunk_duration,
+                                embed_duration,
+                                persist_duration,
+                                create_time,
+                                end_time
+                            FROM t_knowledge_document_chunk_log
+                            WHERE doc_id = d.id
+                            ORDER BY create_time DESC
+                            LIMIT 1
+                        ) l ON TRUE
+                        WHERE d.id = :doc_id AND d.deleted = 0
+                        LIMIT 1
+                        """
+                    ),
+                    {"doc_id": doc_id},
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            return None
+        return KnowledgeDocumentChunkStatusRecord(
+            id=str(row["id"]),
+            kb_id=str(row["kb_id"]),
+            doc_name=str(row["doc_name"]),
+            status=str(row["status"]),
+            chunk_count=int(row["chunk_count"] or 0),
+            log_status=str(row["log_status"]) if row["log_status"] is not None else None,
+            message_id=str(row["message_id"]) if row["message_id"] is not None else None,
+            error_message=str(row["error_message"]) if row["error_message"] is not None else None,
+            total_duration=int(row["total_duration"]) if row["total_duration"] is not None else None,
+            extract_duration=int(row["extract_duration"]) if row["extract_duration"] is not None else None,
+            chunk_duration=int(row["chunk_duration"]) if row["chunk_duration"] is not None else None,
+            embed_duration=int(row["embed_duration"]) if row["embed_duration"] is not None else None,
+            persist_duration=int(row["persist_duration"]) if row["persist_duration"] is not None else None,
+            log_create_time=str(row["log_create_time"]) if row["log_create_time"] is not None else None,
+            log_end_time=str(row["log_end_time"]) if row["log_end_time"] is not None else None,
+        )
     def mark_document_chunk_running_cas(
         self,
         *,

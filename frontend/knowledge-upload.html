@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>知识库文件上传</title>
+  <title>Knowledge document upload</title>
   <link rel="stylesheet" href="./css/element.css">
   <link rel="stylesheet" href="./css/main.css">
   <link rel="stylesheet" href="./css/knowledge-upload.css?v=20260627">
@@ -16,97 +16,112 @@
         <div class="brand-mark">H</div>
         <div>
           <div class="brand-title">HYEEE AI</div>
-          <div class="brand-subtitle">知识库管理</div>
+          <div class="brand-subtitle">Knowledge base</div>
         </div>
       </div>
       <button class="side-link active" type="button">
         <i class="el-icon-upload2"></i>
-        <span>上传文档</span>
+        <span>Upload document</span>
       </button>
       <button class="side-link" type="button" @click="goCreate">
         <i class="el-icon-folder-add"></i>
-        <span>创建知识库</span>
+        <span>Create knowledge base</span>
       </button>
       <button class="side-link" type="button" @click="goChat">
         <i class="el-icon-chat-line-round"></i>
-        <span>返回聊天</span>
+        <span>Back to chat</span>
       </button>
     </aside>
 
     <main class="kb-main">
       <header class="kb-header">
         <div>
-          <div class="header-title">知识库文件上传</div>
-          <div class="header-subtitle">选择知识库、来源类型和分块策略，上传后文档状态会进入 PENDING</div>
+          <div class="header-title">Knowledge document upload</div>
+          <div class="header-subtitle">Choose a knowledge base, source type, and chunk strategy. Uploaded documents enter PENDING first.</div>
         </div>
         <div class="status-pill">
           <span class="status-dot"></span>
-          {{submitting ? "上传中" : "就绪"}}
+          {{submitting ? "Uploading" : "Ready"}}
         </div>
       </header>
 
       <section class="kb-content">
         <form class="upload-form" @submit.prevent="submitUpload">
           <div class="form-section">
-            <div class="section-title">目标知识库</div>
-            <el-select v-model="form.knowledgeBaseName" filterable placeholder="请选择知识库" :loading="loadingBases">
+            <div class="section-title">Target knowledge base</div>
+            <el-select v-model="form.knowledgeBaseName" filterable placeholder="Select knowledge base" :loading="loadingBases">
               <el-option v-for="item in knowledgeBases" :key="item.id" :label="item.name" :value="item.name"></el-option>
             </el-select>
           </div>
 
           <div class="form-section">
-            <div class="section-title">文件来源</div>
+            <div class="section-title">File source</div>
             <el-radio-group v-model="form.sourceType">
-              <el-radio-button label="FILE">本地文件</el-radio-button>
-              <el-radio-button label="URL">远程 URL</el-radio-button>
+              <el-radio-button label="FILE">Local file</el-radio-button>
+              <el-radio-button label="URL">Remote URL</el-radio-button>
             </el-radio-group>
             <div class="source-box" v-if="form.sourceType === 'FILE'">
               <input ref="fileInput" class="file-input" type="file" @change="onFileChange">
               <button class="file-button" type="button" @click="$refs.fileInput.click()">
                 <i class="el-icon-document-add"></i>
-                <span>{{selectedFile ? selectedFile.name : "选择文件"}}</span>
+                <span>{{selectedFile ? selectedFile.name : "Choose file"}}</span>
               </button>
               <span class="file-meta" v-if="selectedFile">{{formatBytes(selectedFile.size)}}</span>
             </div>
             <div class="source-box" v-else>
               <el-input v-model="form.url" placeholder="https://example.com/manual.pdf"></el-input>
-              <div class="todo-line">URL 定时同步暂不启用，后续接入调度表。</div>
+              <div class="todo-line">URL scheduled sync is not enabled yet.</div>
             </div>
           </div>
 
           <div class="form-section split chunk-section">
             <div>
-              <div class="section-title">新上传文档</div>
+              <div class="section-title">New uploaded document</div>
               <div class="readonly-field chunk-id-field" :class="{'placeholder': !(result && result.id)}">
-                {{result && result.id ? result.id : "上传成功后显示文档 ID"}}
+                {{result && result.id ? result.id : "Document ID appears after upload"}}
               </div>
             </div>
             <div>
-              <div class="section-title">分块操作</div>
-              <button class="chunk-btn" type="button" :disabled="chunking || !(result && result.id)" @click="startChunking">
+              <div class="section-title">Chunk action</div>
+              <button class="chunk-btn" type="button" :disabled="chunking || chunkPolling || !(result && result.id)" @click="startChunking">
                 <i class="el-icon-s-operation"></i>
-                <span>{{chunking ? "分块中" : "开始分块"}}</span>
+                <span>{{chunking ? "Submitting..." : (chunkPolling ? "Processing..." : "Start chunking")}}</span>
               </button>
             </div>
           </div>
+
           <div v-if="chunkMessage" class="chunk-status success">{{chunkMessage}}</div>
           <div v-if="chunkErrorMessage" class="chunk-status error">{{chunkErrorMessage}}</div>
+          <div v-if="chunkStatus" class="chunk-progress">
+            <div class="chunk-progress-head">
+              <span>Chunk status</span>
+              <strong>{{displayChunkPhase}}</strong>
+            </div>
+            <div class="chunk-progress-grid">
+              <div><span>Document</span><strong>{{chunkStatus.status || "-"}}</strong></div>
+              <div><span>Log</span><strong>{{chunkStatus.logStatus || "-"}}</strong></div>
+              <div><span>Chunks</span><strong>{{chunkStatus.chunkCount || 0}}</strong></div>
+              <div><span>Total</span><strong>{{formatDuration(chunkStatus.totalDuration)}}</strong></div>
+            </div>
+            <div v-if="chunkStatus.errorMessage" class="chunk-progress-error">{{chunkStatus.errorMessage}}</div>
+          </div>
+
           <div class="form-section split">
             <div>
-              <div class="section-title">分块策略</div>
-              <el-select v-model="form.chunkStrategy" placeholder="请选择分块策略">
-                <el-option label="固定大小分块 fixed_size" value="fixed_size"></el-option>
-                <el-option label="结构感知分块 structure_aware" value="structure_aware"></el-option>
+              <div class="section-title">Chunk strategy</div>
+              <el-select v-model="form.chunkStrategy" placeholder="Select chunk strategy">
+                <el-option label="Fixed size fixed_size" value="fixed_size"></el-option>
+                <el-option label="Structure aware structure_aware" value="structure_aware"></el-option>
               </el-select>
             </div>
             <div>
-              <div class="section-title">处理模式</div>
+              <div class="section-title">Process mode</div>
               <div class="readonly-field">CHUNK</div>
             </div>
           </div>
 
           <div class="form-section">
-            <div class="section-title">分块配置</div>
+            <div class="section-title">Chunk config</div>
             <el-input
               type="textarea"
               resize="none"
@@ -118,22 +133,24 @@
           <div class="actions">
             <button class="submit-btn" type="submit" :disabled="submitting">
               <i class="el-icon-upload"></i>
-              <span>{{submitting ? "上传中" : "上传到知识库"}}</span>
+              <span>{{submitting ? "Uploading" : "Upload to knowledge base"}}</span>
             </button>
-            <button class="reset-btn" type="button" @click="resetForm">重置</button>
+            <button class="reset-btn" type="button" @click="resetForm">Reset</button>
           </div>
         </form>
 
         <aside class="result-panel">
-          <div class="panel-title">上传结果</div>
-          <div v-if="!result && !errorMessage" class="empty-result">等待提交</div>
+          <div class="panel-title">Upload result</div>
+          <div v-if="!result && !errorMessage" class="empty-result">Waiting for submit</div>
           <div v-if="errorMessage" class="error-result">{{errorMessage}}</div>
           <div v-if="result" class="result-list">
-            <div class="result-row"><span>文档名称</span><strong>{{result.docName}}</strong></div>
-            <div class="result-row"><span>状态</span><strong>{{result.status}}</strong></div>
-            <div class="result-row"><span>来源</span><strong>{{result.sourceType}}</strong></div>
-            <div class="result-row"><span>分块策略</span><strong>{{result.chunkStrategy}}</strong></div>
-            <div class="result-row wide"><span>对象地址</span><strong>{{result.fileUrl}}</strong></div>
+            <div class="result-row"><span>Document ID</span><strong>{{result.id}}</strong></div>
+            <div class="result-row"><span>Name</span><strong>{{result.docName}}</strong></div>
+            <div class="result-row"><span>Status</span><strong>{{result.status}}</strong></div>
+            <div class="result-row"><span>Chunks</span><strong>{{result.chunkCount || 0}}</strong></div>
+            <div class="result-row"><span>Source</span><strong>{{result.sourceType}}</strong></div>
+            <div class="result-row"><span>Strategy</span><strong>{{result.chunkStrategy}}</strong></div>
+            <div class="result-row wide"><span>Object URL</span><strong>{{result.fileUrl}}</strong></div>
           </div>
         </aside>
       </section>
@@ -158,6 +175,10 @@
       errorMessage: "",
       chunkMessage: "",
       chunkErrorMessage: "",
+      chunkStatus: null,
+      chunkPolling: false,
+      chunkPollTimer: null,
+      chunkPollFailures: 0,
       form: {
         knowledgeBaseName: "",
         sourceType: "FILE",
@@ -168,6 +189,15 @@
     },
     created() {
       this.loadKnowledgeBases();
+    },
+    beforeDestroy() {
+      this.stopChunkPolling();
+    },
+    computed: {
+      displayChunkPhase() {
+        if (!this.chunkStatus) return "-";
+        return this.chunkStatus.logStatus || this.chunkStatus.status || "-";
+      }
     },
     methods: {
       goCreate() {
@@ -181,7 +211,7 @@
         axios.get("/v1/knowledge-bases").then(({data}) => {
           this.knowledgeBases = Array.isArray(data) ? data : [];
         }).catch(err => {
-          this.errorMessage = "知识库列表加载失败：" + this.readError(err);
+          this.errorMessage = "Failed to load knowledge bases: " + this.readError(err);
         }).finally(() => {
           this.loadingBases = false;
         });
@@ -190,15 +220,15 @@
         this.selectedFile = event.target.files && event.target.files[0] ? event.target.files[0] : null;
       },
       validateForm() {
-        if (!this.form.knowledgeBaseName) return "请选择知识库";
-        if (!this.form.chunkStrategy) return "请选择分块策略";
+        if (!this.form.knowledgeBaseName) return "Please select a knowledge base";
+        if (!this.form.chunkStrategy) return "Please select a chunk strategy";
         try {
           JSON.parse(this.form.chunkConfig);
         } catch (e) {
-          return "分块配置必须是合法 JSON";
+          return "chunkConfig must be valid JSON";
         }
-        if (this.form.sourceType === "FILE" && !this.selectedFile) return "请选择本地文件";
-        if (this.form.sourceType === "URL" && !this.form.url.trim()) return "请输入远程文件 URL";
+        if (this.form.sourceType === "FILE" && !this.selectedFile) return "Please choose a local file";
+        if (this.form.sourceType === "URL" && !this.form.url.trim()) return "Please enter a remote file URL";
         return "";
       },
       submitUpload() {
@@ -212,10 +242,12 @@
         this.errorMessage = "";
         this.chunkMessage = "";
         this.chunkErrorMessage = "";
+        this.chunkStatus = null;
+        this.stopChunkPolling();
         const request = this.form.sourceType === "FILE" ? this.buildFileRequest() : this.buildUrlRequest();
         axios.post("/v1/knowledge-documents/upload", request.body, request.config).then(({data}) => {
           this.result = data;
-          this.$message.success("文件已上传，状态为 PENDING");
+          this.$message.success("Document uploaded. Status is PENDING.");
         }).catch(err => {
           this.errorMessage = this.readError(err);
           this.$message.error(this.errorMessage);
@@ -248,19 +280,24 @@
       },
       startChunking() {
         if (!this.result || !this.result.id) {
-          this.$message.warning("请先上传文档");
+          this.$message.warning("Please upload a document first");
           return;
         }
         this.chunking = true;
         this.chunkMessage = "";
         this.chunkErrorMessage = "";
+        this.chunkStatus = null;
+        this.stopChunkPolling();
         axios.post(this.buildStartChunkUrl(this.result.id), null, { timeout: 120000 }).then(({data}) => {
           if (data && typeof data === "object") {
             this.result = Object.assign({}, this.result, data);
           }
-          this.chunkMessage = "分块任务已提交";
+          this.chunkMessage = "Chunk task submitted. Waiting for processing result...";
           this.$message.success(this.chunkMessage);
+          this.fetchChunkStatus();
+          this.startChunkPolling();
         }).catch(err => {
+          this.stopChunkPolling();
           this.chunkErrorMessage = this.readError(err);
           this.$message.error(this.chunkErrorMessage);
         }).finally(() => {
@@ -270,12 +307,62 @@
       buildStartChunkUrl(documentId) {
         return "/v1/knowledge-documents/" + encodeURIComponent(documentId) + "/chunks/start";
       },
+      buildChunkStatusUrl(documentId) {
+        return "/v1/knowledge-documents/" + encodeURIComponent(documentId) + "/chunks/status";
+      },
+      startChunkPolling() {
+        this.stopChunkPolling();
+        this.chunkPolling = true;
+        this.chunkPollFailures = 0;
+        this.chunkPollTimer = setInterval(() => {
+          this.fetchChunkStatus();
+        }, 2000);
+      },
+      stopChunkPolling() {
+        if (this.chunkPollTimer) {
+          clearInterval(this.chunkPollTimer);
+          this.chunkPollTimer = null;
+        }
+        this.chunkPolling = false;
+      },
+      fetchChunkStatus() {
+        if (!this.result || !this.result.id) return;
+        axios.get(this.buildChunkStatusUrl(this.result.id), { timeout: 30000 }).then(({data}) => {
+          this.chunkPollFailures = 0;
+          this.chunkStatus = data;
+          if (data && typeof data === "object") {
+            this.result = Object.assign({}, this.result, {
+              status: data.status || this.result.status,
+              chunkCount: data.chunkCount || 0
+            });
+          }
+          const docStatus = String(data && data.status || "").toUpperCase();
+          const logStatus = String(data && data.logStatus || "").toUpperCase();
+          const finalStatus = logStatus || docStatus;
+          if (finalStatus === "SUCCESS") {
+            this.stopChunkPolling();
+            this.chunkMessage = "Chunking completed.";
+            this.chunkErrorMessage = "";
+          } else if (finalStatus === "FAILED") {
+            this.stopChunkPolling();
+            this.chunkErrorMessage = data.errorMessage || "Chunking failed.";
+          }
+        }).catch(err => {
+          this.chunkPollFailures += 1;
+          if (this.chunkPollFailures >= 5) {
+            this.stopChunkPolling();
+            this.chunkErrorMessage = "Failed to refresh chunk status: " + this.readError(err);
+          }
+        });
+      },
       resetForm() {
         this.selectedFile = null;
         this.result = null;
         this.errorMessage = "";
         this.chunkMessage = "";
         this.chunkErrorMessage = "";
+        this.chunkStatus = null;
+        this.stopChunkPolling();
         this.form.sourceType = "FILE";
         this.form.url = "";
         this.form.chunkStrategy = "fixed_size";
@@ -287,6 +374,13 @@
           ? err.response.data.detail
           : String(err);
       },
+      formatDuration(value) {
+        if (value === null || value === undefined || value === "") return "-";
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "-";
+        if (number < 1000) return number + " ms";
+        return (number / 1000).toFixed(1) + " s";
+      },
       formatBytes(value) {
         if (value < 1024) return value + " B";
         if (value < 1024 * 1024) return (value / 1024).toFixed(1) + " KB";
@@ -297,3 +391,4 @@
 </script>
 </body>
 </html>
+

@@ -1,4 +1,4 @@
-﻿body {
+body {
     min-width: 1024px;
     background: #eef1f6;
     color: #202124;
@@ -383,4 +383,66 @@ button {
 .el-textarea__inner,
 .el-input__inner {
     font-family: Arial, "Microsoft YaHei", sans-serif;
+}
+
+.chunk-progress {
+    margin-top: 10px;
+    border: 1px solid #d8dde6;
+    border-radius: 6px;
+    background: #fff;
+    padding: 12px;
+}
+
+.chunk-progress-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: #4e5562;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.chunk-progress-head strong {
+    color: #ff6633;
+}
+
+.chunk-progress-grid {
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.chunk-progress-grid div {
+    min-width: 0;
+    border-radius: 4px;
+    background: #f6f7f9;
+    padding: 8px;
+    box-sizing: border-box;
+}
+
+.chunk-progress-grid span,
+.chunk-progress-grid strong {
+    display: block;
+    overflow-wrap: anywhere;
+}
+
+.chunk-progress-grid span {
+    color: #777f8c;
+    font-size: 12px;
+}
+
+.chunk-progress-grid strong {
+    margin-top: 4px;
+    color: #202124;
+    font-size: 13px;
+}
+
+.chunk-progress-error {
+    margin-top: 10px;
+    color: #c44720;
+    font-size: 13px;
+    line-height: 18px;
+    overflow-wrap: anywhere;
 }

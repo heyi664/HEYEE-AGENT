@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     ai_base_url: str = "https://api.openai.com/v1"
     ai_model: str = "gpt-4o-mini"
     ai_timeout_seconds: float = Field(default=25.0, gt=0)
+    ai_models_json: str | None = None
+    ai_circuit_failure_threshold: int = Field(default=3, ge=1)
+    ai_circuit_open_seconds: float = Field(default=60.0, gt=0)
+    ai_circuit_half_open_max_in_flight: int = Field(default=1, ge=1)
     agent_max_steps: int = Field(default=5, ge=1, le=10)
 
     embedding_provider: str = "siliconflow"
@@ -83,4 +87,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

@@ -2,45 +2,46 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
-from typing import Any, cast
-
-import httpx
+from typing import Any
 
 from agent_service.core.config import get_settings
 from agent_service.core.errors import ModelUnavailableError
+from agent_service.infra_ai import get_model_routing_executor, get_model_selector
+from agent_service.infra_ai.clients import (
+    ChatModelClient,
+    ChatModelClientRegistry,
+    ToolCallingUnavailable,
+)
+from agent_service.infra_ai.clients import (
+    ChatTurn as FunctionCallTurn,
+)
+from agent_service.infra_ai.clients import (
+    ToolCallRequest as FunctionCallRequest,
+)
+from agent_service.infra_ai.models import ModelCapability, ModelTarget
 from agent_service.tools.registry import ToolRegistry
+
+FunctionCallingUnavailable = ToolCallingUnavailable
 
 logger = logging.getLogger(__name__)
 
 
-class FunctionCallingUnavailable(RuntimeError):
-    """The configured model or provider cannot process native tools."""
-
-
-@dataclass(frozen=True)
-class FunctionCallRequest:
-    call_id: str
-    name: str
-    arguments: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class FunctionCallTurn:
-    content: str | None
-    tool_calls: list[FunctionCallRequest]
-    assistant_message: dict[str, Any]
-
-
-@dataclass(frozen=True)
 class FunctionCallResult:
-    reply: str
-    tool_calls: list[str]
+    def __init__(self, reply: str, tool_calls: list[str]) -> None:
+        self.reply = reply
+        self.tool_calls = tool_calls
 
 
 class FunctionCallService:
-    def __init__(self, registry: ToolRegistry) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        client_registry: ChatModelClientRegistry | None = None,
+    ) -> None:
         self._registry = registry
+        self._selector = get_model_selector()
+        self._routing_executor = get_model_routing_executor()
+        self._client_registry = client_registry or ChatModelClientRegistry()
 
     async def complete(
         self,
@@ -103,114 +104,22 @@ class FunctionCallService:
         messages: list[dict[str, Any]],
         schemas: list[dict[str, Any]],
     ) -> FunctionCallTurn:
-        if get_settings().ai_provider.lower() == "ollama":
-            return await self._ollama_turn(messages, schemas)
-        return await self._openai_turn(messages, schemas)
+        targets = self._selector.select_chat_candidates(require_tools=bool(schemas))
+        return await self._routing_executor.execute_with_fallback(
+            ModelCapability.CHAT,
+            targets,
+            self._client_registry.resolve,
+            lambda client, target: self._call_chat_client(client, target, messages, schemas),
+        )
 
-    async def _ollama_turn(
+    async def _call_chat_client(
         self,
+        client: ChatModelClient,
+        target: ModelTarget,
         messages: list[dict[str, Any]],
         schemas: list[dict[str, Any]],
     ) -> FunctionCallTurn:
-        settings = get_settings()
-        payload: dict[str, Any] = {
-            "model": settings.ai_model,
-            "messages": messages,
-            "stream": False,
-            "options": {"temperature": 0},
-        }
-        if schemas:
-            payload["tools"] = schemas
-
-        try:
-            async with httpx.AsyncClient(
-                timeout=settings.ai_timeout_seconds,
-                trust_env=False,
-            ) as client:
-                response = await client.post(
-                    f"{settings.ai_base_url.rstrip('/')}/api/chat",
-                    json=payload,
-                )
-                response.raise_for_status()
-                data = response.json()
-        except httpx.HTTPStatusError as exc:
-            if schemas and exc.response.status_code in {400, 404, 422, 500}:
-                raise FunctionCallingUnavailable(
-                    f"Ollama model '{settings.ai_model}' does not support tools"
-                ) from exc
-            raise ModelUnavailableError(str(exc)) from exc
-        except Exception as exc:
-            raise ModelUnavailableError(str(exc)) from exc
-
-        message = cast(dict[str, Any], data.get("message") or {})
-        calls: list[FunctionCallRequest] = []
-        for index, raw_call in enumerate(message.get("tool_calls") or []):
-            function = raw_call.get("function") or {}
-            name = str(function.get("name") or "").strip()
-            if name:
-                calls.append(
-                    FunctionCallRequest(
-                        call_id=str(raw_call.get("id") or f"ollama_call_{index}"),
-                        name=name,
-                        arguments=self._normalize_arguments(function.get("arguments")),
-                    )
-                )
-
-        return FunctionCallTurn(
-            content=self._optional_text(message.get("content")),
-            tool_calls=calls,
-            assistant_message=message,
-        )
-    async def _openai_turn(
-        self,
-        messages: list[dict[str, Any]],
-        schemas: list[dict[str, Any]],
-    ) -> FunctionCallTurn:
-        settings = get_settings()
-        if not settings.ai_api_key:
-            raise ModelUnavailableError("AI_API_KEY is not configured")
-
-        try:
-            from openai import AsyncOpenAI
-
-            client = AsyncOpenAI(
-                api_key=settings.ai_api_key,
-                base_url=settings.ai_base_url,
-                timeout=settings.ai_timeout_seconds,
-            )
-            request: dict[str, Any] = {
-                "model": settings.ai_model,
-                "messages": messages,
-                "temperature": 0.2,
-            }
-            if schemas:
-                request["tools"] = schemas
-                request["tool_choice"] = "auto"
-            response = await client.chat.completions.create(**cast(Any, request))
-            if not response.choices:
-                raise ModelUnavailableError("model returned no choices")
-            message = response.choices[0].message
-        except ModelUnavailableError:
-            raise
-        except Exception as exc:
-            error_text = str(exc).lower()
-            if schemas and ("tool" in error_text or "function" in error_text):
-                raise FunctionCallingUnavailable(str(exc)) from exc
-            raise ModelUnavailableError(str(exc)) from exc
-
-        calls = [
-            FunctionCallRequest(
-                call_id=tool_call.id,
-                name=tool_call.function.name,
-                arguments=self._normalize_arguments(tool_call.function.arguments),
-            )
-            for tool_call in (message.tool_calls or [])
-        ]
-        return FunctionCallTurn(
-            content=self._optional_text(message.content),
-            tool_calls=calls,
-            assistant_message=cast(dict[str, Any], message.model_dump(exclude_none=True)),
-        )
+        return await client.complete_turn(target, messages, schemas)
 
     async def _execute(self, call: FunctionCallRequest) -> tuple[str, str]:
         tool = self._registry.get(call.name)
@@ -246,24 +155,3 @@ class FunctionCallService:
             "content": observation,
             "tool_call_id": call.call_id,
         }
-
-    def _normalize_arguments(self, value: Any) -> dict[str, Any]:
-        if isinstance(value, dict):
-            return cast(dict[str, Any], value)
-        if value is None:
-            return {}
-        if isinstance(value, str):
-            try:
-                decoded = json.loads(value)
-            except json.JSONDecodeError:
-                return {"input": value.strip()}
-            if isinstance(decoded, dict):
-                return cast(dict[str, Any], decoded)
-            return {"input": decoded}
-        return {"input": value}
-
-    def _optional_text(self, value: Any) -> str | None:
-        if value is None:
-            return None
-        text = str(value).strip()
-        return text or None

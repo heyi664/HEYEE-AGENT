@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 from agent_service.core.config import get_settings
 from agent_service.core.errors import ModelUnavailableError
 from agent_service.infra_ai import get_model_routing_executor, get_model_selector
@@ -13,6 +15,31 @@ class EmbeddingService:
         self._selector = get_model_selector()
         self._routing_executor = get_model_routing_executor()
         self._client_registry = client_registry or EmbeddingModelClientRegistry()
+
+    async def embed(self, text: str, model_id: str | None = None) -> list[float]:
+        vectors = await self.embed_batch([text], model_id=model_id)
+        if not vectors:
+            raise ModelUnavailableError("Embedding API returned no vectors")
+        return vectors[0]
+
+    async def embed_batch(
+        self,
+        texts: list[str],
+        model_id: str | None = None,
+    ) -> list[list[float]]:
+        if not texts:
+            return []
+        embeddings, _expected_dimension = await self._embed_texts(texts, model_id=model_id)
+        return embeddings
+
+    def dimension(self, model_id: str | None = None) -> int:
+        settings = get_settings()
+        if model_id is None:
+            targets = self._selector.select_embedding_candidates()
+            if targets:
+                return targets[0].candidate.dimension or settings.embedding_dimension
+            return settings.embedding_dimension
+        return self._resolve_target(model_id).candidate.dimension or settings.embedding_dimension
 
     async def embed_chunks(
         self,
@@ -49,11 +76,19 @@ class EmbeddingService:
                 )
         return vectors
 
-    async def _embed_texts(self, texts: list[str]) -> tuple[list[list[float]], int]:
+    async def _embed_texts(
+        self,
+        texts: list[str],
+        model_id: str | None = None,
+    ) -> tuple[list[list[float]], int]:
         settings = get_settings()
-        targets = self._selector.select_embedding_candidates()
+        targets = (
+            [self._resolve_target(model_id)]
+            if model_id is not None
+            else self._selector.select_embedding_candidates()
+        )
         return await self._routing_executor.execute_with_fallback(
-            ModelCapability.EMBEDDING,
+            cast(ModelCapability, ModelCapability.EMBEDDING),
             targets,
             self._client_registry.resolve,
             lambda client, target: self._embed_with_client(
@@ -73,6 +108,14 @@ class EmbeddingService:
     ) -> tuple[list[list[float]], int]:
         embeddings = await client.embed_batch(target, texts)
         return embeddings, target.candidate.dimension or fallback_dimension
+
+    def _resolve_target(self, model_id: str) -> ModelTarget:
+        if not model_id.strip():
+            raise ModelUnavailableError("Embedding model ID must not be empty")
+        for target in self._selector.select_embedding_candidates():
+            if target.id == model_id:
+                return target
+        raise ModelUnavailableError(f"Embedding model is unavailable: {model_id}")
 
 
 def _batches(items: list[TextChunk], size: int) -> list[list[TextChunk]]:

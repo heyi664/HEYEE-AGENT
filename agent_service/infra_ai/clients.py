@@ -12,6 +12,7 @@ from agent_service.core.config import get_settings
 from agent_service.core.errors import ModelUnavailableError
 from agent_service.infra_ai.models import ModelTarget
 from agent_service.infra_ai.url_resolver import resolve_model_url
+from agent_service.rag.schemas import RetrievedChunk
 
 
 class ToolCallingUnavailable(RuntimeError):
@@ -86,6 +87,18 @@ class EmbeddingModelClient(Protocol):
     ) -> list[list[float]]: ...
 
 
+class RerankModelClient(Protocol):
+    def supports(self, target: ModelTarget) -> bool: ...
+
+    async def rerank(
+        self,
+        target: ModelTarget,
+        query: str,
+        candidates: list[RetrievedChunk],
+        top_n: int,
+    ) -> list[RetrievedChunk]: ...
+
+
 class ChatModelClientRegistry:
     def __init__(self, clients: list[ChatModelClient] | None = None) -> None:
         self._clients = clients or [OllamaChatModelClient(), OpenAICompatibleChatModelClient()]
@@ -96,7 +109,11 @@ class ChatModelClientRegistry:
 
 class EmbeddingModelClientRegistry:
     def __init__(self, clients: list[EmbeddingModelClient] | None = None) -> None:
-        self._clients = clients or [OpenAICompatibleEmbeddingModelClient()]
+        self._clients = clients or [
+            OllamaEmbeddingModelClient(),
+            SiliconFlowEmbeddingModelClient(),
+            OpenAICompatibleEmbeddingModelClient(),
+        ]
 
     def resolve(self, target: ModelTarget) -> EmbeddingModelClient | None:
         return next((client for client in self._clients if client.supports(target)), None)
@@ -437,33 +454,119 @@ class OpenAICompatibleChatModelClient(AbstractOpenAIStyleChatModelClient):
         return not OllamaChatModelClient().supports(target)
 
 
-class OpenAICompatibleEmbeddingModelClient:
+class AbstractOpenAIStyleEmbeddingModelClient:
+    def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self._transport = transport
+
     def supports(self, target: ModelTarget) -> bool:
-        return True
+        return self.provider() == "*" or target.candidate.provider.lower() == self.provider()
+
+    def provider(self) -> str:
+        return "*"
+
+    async def embed(
+        self,
+        target: ModelTarget,
+        text: str,
+    ) -> list[float]:
+        vectors = await self.embed_batch(target, [text])
+        if not vectors:
+            raise ModelUnavailableError("Embedding API returned no vectors")
+        return vectors[0]
 
     async def embed_batch(
         self,
         target: ModelTarget,
         texts: list[str],
     ) -> list[list[float]]:
-        if not target.provider.api_key:
+        if not texts:
+            return []
+        batch_size = self.max_batch_size()
+        if batch_size <= 0 or len(texts) <= batch_size:
+            return await self.do_embed(target, texts)
+
+        results: list[list[float] | None] = [None] * len(texts)
+        for start in range(0, len(texts), batch_size):
+            end = min(start + batch_size, len(texts))
+            part = await self.do_embed(target, texts[start:end])
+            if len(part) != end - start:
+                raise ModelUnavailableError("Embedding API returned an unexpected result count")
+            for index, vector in enumerate(part):
+                results[start + index] = vector
+        return [self._require_vector(vector) for vector in results]
+
+    async def do_embed(
+        self,
+        target: ModelTarget,
+        texts: list[str],
+    ) -> list[list[float]]:
+        if self.requires_api_key() and not target.provider.api_key:
             raise ModelUnavailableError("Embedding provider API key is not configured")
-        url = resolve_model_url(target)
-        payload = {"model": target.candidate.model, "input": texts}
-        headers = {
-            "Authorization": f"Bearer {target.provider.api_key}",
-            "Content-Type": "application/json",
-        }
+        payload = self.build_request_body(target, texts)
+        headers = self.new_authorized_headers(target)
         timeout = target.candidate.timeout_seconds or get_settings().embedding_timeout_seconds
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, json=payload, headers=headers)
+        try:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                transport=self._transport,
+                trust_env=False,
+            ) as client:
+                response = await client.post(
+                    resolve_model_url(target),
+                    json=payload,
+                    headers=headers,
+                )
+        except httpx.HTTPError as exc:
+            raise ModelUnavailableError(str(exc)) from exc
+        except ValueError as exc:
+            raise ModelUnavailableError(str(exc)) from exc
+
         if response.is_error:
             raise ModelUnavailableError(
-                f"Embedding API failed status={response.status_code} body={response.text[:500]}"
+                f"{target.provider.name} embedding API failed: "
+                f"HTTP {response.status_code} body={response.text[:500]}"
             )
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise ModelUnavailableError("Embedding API returned invalid JSON") from exc
+        return self.extract_embeddings(data)
+
+    def requires_api_key(self) -> bool:
+        return True
+
+    def max_batch_size(self) -> int:
+        return 0
+
+    def build_request_body(self, target: ModelTarget, texts: list[str]) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "model": target.candidate.model,
+            "input": texts,
+        }
+        if target.candidate.dimension is not None:
+            body["dimensions"] = target.candidate.dimension
+        self.customize_request_body(body, target)
+        return body
+
+    def customize_request_body(self, body: dict[str, Any], target: ModelTarget) -> None:
+        body["encoding_format"] = "float"
+
+    def new_authorized_headers(self, target: ModelTarget) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.requires_api_key():
+            headers["Authorization"] = f"Bearer {target.provider.api_key}"
+        return headers
+
+    def extract_embeddings(self, data: Any) -> list[list[float]]:
+        if not isinstance(data, dict):
+            raise ModelUnavailableError("Embedding API response must be a JSON object")
+        error = data.get("error")
+        if isinstance(error, dict):
+            code = str(error.get("code") or "unknown")
+            message = str(error.get("message") or "unknown")
+            raise ModelUnavailableError(f"Embedding provider error: {code} - {message}")
         rows = data.get("data")
-        if not isinstance(rows, list):
+        if not isinstance(rows, list) or not rows:
             raise ModelUnavailableError("Embedding API response missing data")
         rows = sorted(
             rows,
@@ -472,11 +575,203 @@ class OpenAICompatibleEmbeddingModelClient:
         embeddings: list[list[float]] = []
         for row in rows:
             embedding = row.get("embedding") if isinstance(row, dict) else None
-            if not isinstance(embedding, list):
+            if not isinstance(embedding, list) or not embedding:
                 raise ModelUnavailableError("Embedding API response missing embedding")
             embeddings.append([float(value) for value in embedding])
         return embeddings
 
+    def _require_vector(self, vector: list[float] | None) -> list[float]:
+        if vector is None:
+            raise ModelUnavailableError("Embedding API returned an incomplete batch result")
+        return vector
+
+
+class OllamaEmbeddingModelClient(AbstractOpenAIStyleEmbeddingModelClient):
+    def provider(self) -> str:
+        return "ollama"
+
+    def requires_api_key(self) -> bool:
+        return False
+
+    def customize_request_body(self, body: dict[str, Any], target: ModelTarget) -> None:
+        return None
+
+
+class SiliconFlowEmbeddingModelClient(AbstractOpenAIStyleEmbeddingModelClient):
+    def provider(self) -> str:
+        return "siliconflow"
+
+    def max_batch_size(self) -> int:
+        return 32
+
+
+class OpenAICompatibleEmbeddingModelClient(AbstractOpenAIStyleEmbeddingModelClient):
+    pass
+
+
+class RerankModelClientRegistry:
+    def __init__(self, clients: list[RerankModelClient] | None = None) -> None:
+        self._clients = clients or [BaiLianRerankClient(), NoopRerankClient()]
+
+    def resolve(self, target: ModelTarget) -> RerankModelClient | None:
+        return next((client for client in self._clients if client.supports(target)), None)
+
+
+class NoopRerankClient:
+    def supports(self, target: ModelTarget) -> bool:
+        return (
+            target.provider.name.lower() == "noop"
+            or target.candidate.provider.lower() == "noop"
+        )
+
+    async def rerank(
+        self,
+        target: ModelTarget,
+        query: str,
+        candidates: list[RetrievedChunk],
+        top_n: int,
+    ) -> list[RetrievedChunk]:
+        deduped = _dedupe_chunks_by_id(candidates)
+        if top_n <= 0:
+            return []
+        return deduped[:top_n]
+
+
+class BaiLianRerankClient:
+    def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self._transport = transport
+
+    def supports(self, target: ModelTarget) -> bool:
+        provider = target.candidate.provider.lower()
+        return provider in {"bailian", "dashscope"}
+
+    async def rerank(
+        self,
+        target: ModelTarget,
+        query: str,
+        candidates: list[RetrievedChunk],
+        top_n: int,
+    ) -> list[RetrievedChunk]:
+        deduped = _dedupe_chunks_by_id(candidates)
+        if top_n <= 0 or not deduped:
+            return []
+        if len(deduped) <= top_n:
+            return deduped
+        if not target.provider.api_key:
+            raise ModelUnavailableError("Rerank provider API key is not configured")
+
+        payload = self.build_request_body(target, query, deduped, top_n)
+        timeout = target.candidate.timeout_seconds or get_settings().ai_timeout_seconds
+        headers = {
+            "Authorization": f"Bearer {target.provider.api_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                transport=self._transport,
+                trust_env=False,
+            ) as client:
+                response = await client.post(
+                    resolve_model_url(target),
+                    json=payload,
+                    headers=headers,
+                )
+        except httpx.HTTPError as exc:
+            raise ModelUnavailableError(str(exc)) from exc
+        except ValueError as exc:
+            raise ModelUnavailableError(str(exc)) from exc
+
+        if response.is_error:
+            raise ModelUnavailableError(
+                f"{target.provider.name} rerank API failed: "
+                f"HTTP {response.status_code} body={response.text[:500]}"
+            )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise ModelUnavailableError("Rerank API returned invalid JSON") from exc
+        return self.extract_reranked_chunks(data, deduped, top_n)
+
+    def build_request_body(
+        self,
+        target: ModelTarget,
+        query: str,
+        candidates: list[RetrievedChunk],
+        top_n: int,
+    ) -> dict[str, Any]:
+        return {
+            "model": target.candidate.model,
+            "input": {
+                "query": query,
+                "documents": [chunk.text or "" for chunk in candidates],
+            },
+            "parameters": {"top_n": top_n, "return_documents": True},
+        }
+
+    def extract_reranked_chunks(
+        self,
+        data: Any,
+        candidates: list[RetrievedChunk],
+        top_n: int,
+    ) -> list[RetrievedChunk]:
+        if not isinstance(data, dict):
+            raise ModelUnavailableError("Rerank API response must be a JSON object")
+        error = data.get("error")
+        if isinstance(error, dict):
+            code = str(error.get("code") or "unknown")
+            message = str(error.get("message") or "unknown")
+            raise ModelUnavailableError(f"Rerank provider error: {code} - {message}")
+        output = data.get("output")
+        if not isinstance(output, dict):
+            raise ModelUnavailableError("Rerank API response missing output")
+        results = output.get("results")
+        if not isinstance(results, list):
+            raise ModelUnavailableError("Rerank API response missing results")
+
+        reranked: list[RetrievedChunk] = []
+        selected_ids: set[str] = set()
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            index = item.get("index")
+            if not isinstance(index, int) or index < 0 or index >= len(candidates):
+                continue
+            source = candidates[index]
+            score_value = item.get("relevance_score")
+            score = float(score_value) if isinstance(score_value, int | float) else source.score
+            reranked.append(source.model_copy(update={"score": score}))
+            selected_ids.add(source.id)
+            if len(reranked) >= top_n:
+                return reranked
+        return _backfill_rerank_results(reranked, selected_ids, candidates, top_n)
+
+
+def _dedupe_chunks_by_id(candidates: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    deduped: list[RetrievedChunk] = []
+    seen: set[str] = set()
+    for chunk in candidates:
+        if chunk.id in seen:
+            continue
+        seen.add(chunk.id)
+        deduped.append(chunk)
+    return deduped
+
+
+def _backfill_rerank_results(
+    reranked: list[RetrievedChunk],
+    selected_ids: set[str],
+    candidates: list[RetrievedChunk],
+    top_n: int,
+) -> list[RetrievedChunk]:
+    for candidate in candidates:
+        if candidate.id in selected_ids:
+            continue
+        reranked.append(candidate)
+        selected_ids.add(candidate.id)
+        if len(reranked) >= top_n:
+            break
+    return reranked
 
 
 async def _notify_callback(callback: object, method_name: str, *args: object) -> None:
@@ -486,6 +781,7 @@ async def _notify_callback(callback: object, method_name: str, *args: object) ->
     result = method(*args)
     if inspect.isawaitable(result):
         await result
+
 
 def _normalize_arguments(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):

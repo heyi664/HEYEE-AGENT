@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent_service.schemas.chat import ChatHistoryItem
+from agent_service.memory.models import MemoryContext
 
 SYSTEM_PROMPT = (
     "你是 HYEEE AI，一个面向本地生活点评、店铺推荐和用户问答场景的助手。"
@@ -8,10 +8,8 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_messages(history: list[ChatHistoryItem], message: str) -> list[dict[str, str]]:
+def build_messages(memory_context: MemoryContext, message: str) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for item in history[-10:]:
-        messages.append({"role": item.role, "content": item.content})
+    messages.extend(memory_context.to_prompt_messages())
     messages.append({"role": "user", "content": message})
     return messages
-

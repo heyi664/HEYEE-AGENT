@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     mcp_fail_fast: bool = False
 
     database_url: str | None = None
+    memory_enabled: bool = True
+    memory_history_keep_turns: int = Field(default=8, ge=1, le=100)
+    memory_summary_enabled: bool = False
+    memory_summary_batch_size: int = Field(default=3, ge=1, le=20)
+    memory_summary_max_chars: int = Field(default=300, ge=100, le=2000)
+    memory_async_compress: bool = True
 
     rustfs_endpoint: str = "http://127.0.0.1:9000"
     rustfs_access_key: str | None = None
@@ -87,3 +93,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+

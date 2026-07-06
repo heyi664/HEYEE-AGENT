@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import time
+from collections.abc import Awaitable
+from typing import cast
 from uuid import uuid4
 
 from agent_service.core.config import get_settings
@@ -49,8 +52,10 @@ class ChatService:
         if settings.memory_enabled and memory_service is not None:
             memory_service.append(conversation_id, user_id, "assistant", result.reply)
             compression_result = memory_service.compress_if_needed(conversation_id, user_id)
-            if inspect.isawaitable(compression_result):
-                await compression_result
+            await self._handle_compression_result(
+                compression_result,
+                async_compress=settings.memory_async_compress,
+            )
 
         elapsed_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
@@ -84,6 +89,27 @@ class ChatService:
             for index, item in enumerate(request.history[-10:])
         ]
         return MemoryContext(messages=messages)
+
+    async def _handle_compression_result(
+        self,
+        compression_result: object,
+        *,
+        async_compress: bool,
+    ) -> None:
+        if not inspect.isawaitable(compression_result):
+            return
+
+        awaitable = cast(Awaitable[object], compression_result)
+        if async_compress:
+            asyncio.create_task(self._log_compression_failure(awaitable))
+            return
+        await self._log_compression_failure(awaitable)
+
+    async def _log_compression_failure(self, awaitable: Awaitable[object]) -> None:
+        try:
+            await awaitable
+        except Exception:
+            logger.exception("conversation memory async compression failed")
 
 
 def get_chat_service() -> ChatService:

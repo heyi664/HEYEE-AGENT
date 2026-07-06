@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     memory_summary_batch_size: int = Field(default=3, ge=1, le=20)
     memory_summary_max_chars: int = Field(default=300, ge=100, le=2000)
     memory_async_compress: bool = True
+    memory_max_prompt_tokens: int = Field(default=3000, ge=100, le=20000)
+    memory_summary_lock_enabled: bool = False
+    memory_summary_lock_redis_url: str | None = None
+    memory_summary_lock_ttl_seconds: int = Field(default=120, ge=1, le=3600)
 
     rustfs_endpoint: str = "http://127.0.0.1:9000"
     rustfs_access_key: str | None = None

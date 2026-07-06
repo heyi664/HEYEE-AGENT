@@ -16,6 +16,10 @@ def test_memory_settings_defaults() -> None:
     assert settings.memory_summary_batch_size == 3
     assert settings.memory_summary_max_chars == 300
     assert settings.memory_async_compress is True
+    assert settings.memory_max_prompt_tokens == 3000
+    assert settings.memory_summary_lock_enabled is False
+    assert settings.memory_summary_lock_redis_url is None
+    assert settings.memory_summary_lock_ttl_seconds == 120
 
 
 def test_memory_context_to_prompt_messages_injects_summary_first() -> None:
@@ -114,6 +118,32 @@ def test_load_uses_recent_window_when_summary_disabled() -> None:
     assert [message.content for message in context.messages] == ["recent question", "recent answer"]
 
 
+def test_load_trims_history_to_token_budget_and_keeps_user_start() -> None:
+    repository = FakeMemoryRepository()
+    repository.summary = MemorySummary(
+        id="sum_1",
+        conversation_id="conv_1",
+        user_id="user_1",
+        last_message_id="msg_1",
+        content="12345",
+    )
+    repository.messages_after = [
+        MemoryMessage(id="msg_2", role="user", content="old message is long"),
+        MemoryMessage(id="msg_3", role="assistant", content="ok"),
+        MemoryMessage(id="msg_4", role="user", content="need"),
+    ]
+    service = ConversationMemoryService(
+        repository=repository,
+        summary_enabled=True,
+        token_counter=CharacterTokenCounter(),
+        max_prompt_tokens=11,
+    )
+
+    context = service.load("conv_1", "user_1")
+
+    assert [message.content for message in context.messages] == ["need"]
+
+
 def test_normalize_history_removes_leading_assistant_messages() -> None:
     service = ConversationMemoryService(repository=FakeMemoryRepository())
 
@@ -142,6 +172,11 @@ def test_pending_user_turn_count_counts_only_user_messages() -> None:
     assert count == 2
 
 
+class CharacterTokenCounter:
+    def count_tokens(self, text: str | None) -> int:
+        return len(text or "")
+
+
 class FakeSummaryService:
     def __init__(self) -> None:
         self.calls: list[tuple[str | None, list[MemoryMessage]]] = []
@@ -154,6 +189,20 @@ class FakeSummaryService:
     ) -> str:
         self.calls.append((existing_summary, pending_messages))
         return "merged summary"
+
+
+class FakeSummaryLock:
+    def __init__(self, token: str | None) -> None:
+        self.token = token
+        self.acquired: list[tuple[str, str]] = []
+        self.released: list[str] = []
+
+    def acquire(self, conversation_id: str, user_id: str) -> str | None:
+        self.acquired.append((conversation_id, user_id))
+        return self.token
+
+    def release(self, token: str) -> None:
+        self.released.append(token)
 
 
 class CompressRepository(FakeMemoryRepository):
@@ -193,4 +242,43 @@ async def test_compress_if_needed_merges_pending_and_updates_watermark() -> None
         "msg_4",
         "msg_5",
     ]
+    assert repository.upserts == [("conv_1", "msg_5", "merged summary")]
+
+
+@pytest.mark.asyncio
+async def test_compress_if_needed_skips_when_summary_lock_is_held() -> None:
+    repository = CompressRepository()
+    summary_service = FakeSummaryService()
+    lock = FakeSummaryLock(token=None)
+    service = ConversationMemoryService(
+        repository=repository,
+        summary_service=summary_service,
+        summary_enabled=True,
+        summary_batch_size=2,
+        summary_lock=lock,
+    )
+
+    await service.compress_if_needed("conv_1", "user_1")
+
+    assert lock.acquired == [("conv_1", "user_1")]
+    assert summary_service.calls == []
+    assert repository.upserts == []
+
+
+@pytest.mark.asyncio
+async def test_compress_if_needed_releases_summary_lock_after_success() -> None:
+    repository = CompressRepository()
+    summary_service = FakeSummaryService()
+    lock = FakeSummaryLock(token="token_1")
+    service = ConversationMemoryService(
+        repository=repository,
+        summary_service=summary_service,
+        summary_enabled=True,
+        summary_batch_size=2,
+        summary_lock=lock,
+    )
+
+    await service.compress_if_needed("conv_1", "user_1")
+
+    assert lock.released == ["token_1"]
     assert repository.upserts == [("conv_1", "msg_5", "merged summary")]

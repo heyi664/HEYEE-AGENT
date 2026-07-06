@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import time
+
 import pytest
 
 from agent_service.memory.models import MemoryContext, MemoryMessage
@@ -36,6 +39,17 @@ class FakeMemoryService:
         self.compressed.append((conversation_id, user_id))
 
 
+class SlowAsyncMemoryService(FakeMemoryService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.finished = False
+
+    async def compress_if_needed(self, conversation_id: str, user_id: str) -> None:
+        await asyncio.sleep(0.05)
+        self.compressed.append((conversation_id, user_id))
+        self.finished = True
+
+
 @pytest.mark.asyncio
 async def test_chat_service_loads_memory_and_appends_assistant_reply() -> None:
     llm_service = FakeLLMService()
@@ -58,3 +72,27 @@ async def test_chat_service_loads_memory_and_appends_assistant_reply() -> None:
     ]
     assert memory_service.compressed == [("conv_1", "7")]
     assert llm_service.messages[-1] == {"role": "user", "content": "current question"}
+
+
+@pytest.mark.asyncio
+async def test_chat_service_schedules_async_compression_without_waiting() -> None:
+    llm_service = FakeLLMService()
+    memory_service = SlowAsyncMemoryService()
+    service = ChatService(llm_service=llm_service, memory_service=memory_service)
+
+    started = time.perf_counter()
+    response = await service.chat(
+        ChatRequest(
+            userId=7,
+            conversationId="conv_1",
+            message="current question",
+            history=[],
+        )
+    )
+    elapsed = time.perf_counter() - started
+
+    assert response.reply == "assistant reply"
+    assert elapsed < 0.04
+    assert memory_service.finished is False
+    await asyncio.sleep(0.06)
+    assert memory_service.compressed == [("conv_1", "7")]

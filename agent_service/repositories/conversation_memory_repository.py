@@ -243,6 +243,88 @@ class ConversationMemoryRepository:
                 },
             )
 
+    def list_conversations(self, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        from sqlalchemy import text
+
+        with self._engine.connect() as conn:
+            rows = (
+                conn.execute(
+                    text(
+                        """
+                        SELECT conversation_id, user_id, title, last_time, create_time, update_time
+                        FROM t_conversation
+                        WHERE user_id = :user_id
+                          AND deleted = 0
+                        ORDER BY last_time DESC NULLS LAST, create_time DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    {"user_id": user_id, "limit": limit},
+                )
+                .mappings()
+                .all()
+            )
+        return [dict(row) for row in rows]
+
+    def list_messages(
+        self,
+        conversation_id: str,
+        user_id: str,
+        limit: int = 100,
+    ) -> list[MemoryMessage]:
+        from sqlalchemy import text
+
+        with self._engine.connect() as conn:
+            rows = (
+                conn.execute(
+                    text(
+                        """
+                        SELECT id, role, content, create_time
+                        FROM (
+                            SELECT id, role, content, create_time
+                            FROM t_message
+                            WHERE conversation_id = :conversation_id
+                              AND user_id = :user_id
+                              AND role IN ('user', 'assistant')
+                              AND deleted = 0
+                            ORDER BY create_time DESC
+                            LIMIT :limit
+                        ) recent_messages
+                        ORDER BY create_time ASC
+                        """
+                    ),
+                    {"conversation_id": conversation_id, "user_id": user_id, "limit": limit},
+                )
+                .mappings()
+                .all()
+            )
+        return [self._row_to_message(row) for row in rows]
+
+    def soft_delete_conversation(self, conversation_id: str, user_id: str) -> bool:
+        from sqlalchemy import text
+
+        total = 0
+        with self._engine.begin() as conn:
+            for table_name in (
+                "t_conversation",
+                "t_message",
+                "t_conversation_summary",
+                "t_message_feedback",
+            ):
+                result = conn.execute(
+                    text(
+                        f"""
+                        UPDATE {table_name}
+                        SET deleted = 1, update_time = CURRENT_TIMESTAMP
+                        WHERE conversation_id = :conversation_id
+                          AND user_id = :user_id
+                          AND deleted = 0
+                        """
+                    ),
+                    {"conversation_id": conversation_id, "user_id": user_id},
+                )
+                total += result.rowcount or 0
+        return total > 0
     def _row_to_message(self, row: Any) -> MemoryMessage:
         return MemoryMessage(
             id=str(row["id"]),

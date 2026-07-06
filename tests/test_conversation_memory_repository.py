@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -117,3 +117,64 @@ def test_list_recent_turn_messages_uses_user_cutoff_window() -> None:
     statement = engine.connection.statements[0]
     assert "WITH recent_users" in statement.sql
     assert statement.params["keep_turns"] == 8
+
+
+def test_list_conversations_filters_by_user() -> None:
+    created = datetime(2026, 7, 3, 12, 0, 0)
+    engine = FakeEngine(
+        FakeConnection(
+            rows=[
+                {
+                    "conversation_id": "conv_1",
+                    "user_id": "user_1",
+                    "title": "hello",
+                    "last_time": created,
+                    "create_time": created,
+                    "update_time": created,
+                }
+            ]
+        )
+    )
+    repository = ConversationMemoryRepository(engine)
+
+    conversations = repository.list_conversations("user_1", limit=20)
+
+    assert conversations[0]["conversation_id"] == "conv_1"
+    statement = engine.connection.statements[0]
+    assert "FROM t_conversation" in statement.sql
+    assert statement.params["user_id"] == "user_1"
+    assert statement.params["limit"] == 20
+
+
+def test_list_messages_returns_recent_messages_in_time_order() -> None:
+    created = datetime(2026, 7, 3, 12, 0, 0)
+    engine = FakeEngine(
+        FakeConnection(
+            rows=[
+                {"id": "msg_1", "role": "user", "content": "u", "create_time": created},
+                {"id": "msg_2", "role": "assistant", "content": "a", "create_time": created},
+            ]
+        )
+    )
+    repository = ConversationMemoryRepository(engine)
+
+    messages = repository.list_messages("conv_1", "user_1", limit=30)
+
+    assert [message.content for message in messages] == ["u", "a"]
+    statement = engine.connection.statements[0]
+    assert "FROM t_message" in statement.sql
+    assert statement.params["limit"] == 30
+
+
+def test_soft_delete_conversation_marks_all_memory_tables_deleted() -> None:
+    engine = FakeEngine(FakeConnection(rowcount=1))
+    repository = ConversationMemoryRepository(engine)
+
+    deleted = repository.soft_delete_conversation("conv_1", "user_1")
+
+    assert deleted is True
+    statements = [record.sql for record in engine.connection.statements]
+    assert any("UPDATE t_conversation" in statement for statement in statements)
+    assert any("UPDATE t_message" in statement for statement in statements)
+    assert any("UPDATE t_conversation_summary" in statement for statement in statements)
+    assert any("UPDATE t_message_feedback" in statement for statement in statements)

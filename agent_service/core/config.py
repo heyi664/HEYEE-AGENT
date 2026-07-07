@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     memory_redis_url: str | None = None
     memory_lock_ttl_seconds: int = Field(default=120, ge=1, le=3600)
 
+    rag_query_rewrite_enabled: bool = False
+    rag_query_rewrite_history_turns: int = Field(default=2, ge=0, le=5)
+    rag_query_rewrite_max_sub_questions: int = Field(default=5, ge=1, le=10)
+    rag_query_rewrite_history_max_chars: int = Field(default=1500, ge=100, le=10000)
+    rag_query_rewrite_history_message_max_chars: int = Field(default=500, ge=50, le=5000)
+    rag_term_mapping_cache_ttl_seconds: int = Field(default=300, ge=1)
+
     rustfs_endpoint: str = "http://127.0.0.1:9000"
     rustfs_access_key: str | None = None
     rustfs_secret_key: str | None = None
@@ -96,5 +103,8 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+<<<<<<< HEAD
 
 
+=======
+>>>>>>> codex/conversation-memory-refactor

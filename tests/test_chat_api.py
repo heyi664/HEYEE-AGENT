@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
@@ -35,6 +35,22 @@ def test_chat_rejects_blank_message() -> None:
             "userId": 1,
             "conversationId": "conv_001",
             "message": "   ",
+            "history": [],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid chat request"
+
+def test_chat_rejects_too_long_conversation_id() -> None:
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/v1/agent/chat",
+        json={
+            "userId": 1,
+            "conversationId": "conv_" + "x" * 32,
+            "message": "你好",
             "history": [],
         },
     )

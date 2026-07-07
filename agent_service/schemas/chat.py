@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
@@ -13,7 +13,7 @@ class ChatHistoryItem(BaseModel):
 
 class ChatRequest(BaseModel):
     userId: int | None = None
-    conversationId: str | None = None
+    conversationId: str | None = Field(default=None, max_length=20)
     message: str
     history: list[ChatHistoryItem] = Field(default_factory=list)
 
@@ -31,4 +31,5 @@ class ChatResponse(BaseModel):
     createdAt: str = Field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     sources: list[str] = Field(default_factory=list)
     toolCalls: list[str] = Field(default_factory=list)
+
 

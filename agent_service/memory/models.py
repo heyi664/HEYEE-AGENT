@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -22,6 +22,14 @@ class MemorySummary:
     user_id: str
     last_message_id: str
     content: str
+
+
+@dataclass(frozen=True)
+class ConversationRecord:
+    conversation_id: str
+    title: str | None = None
+    last_time: datetime | None = None
+    update_time: datetime | None = None
 
 
 @dataclass(frozen=True)

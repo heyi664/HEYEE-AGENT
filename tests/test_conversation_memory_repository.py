@@ -117,3 +117,57 @@ def test_list_recent_turn_messages_uses_user_cutoff_window() -> None:
     statement = engine.connection.statements[0]
     assert "WITH recent_users" in statement.sql
     assert statement.params["keep_turns"] == 8
+
+def test_list_conversations_queries_user_conversations() -> None:
+    created = datetime(2026, 7, 3, 12, 0, 0)
+    engine = FakeEngine(
+        FakeConnection(
+            rows=[
+                {
+                    "conversation_id": "conv_1",
+                    "title": "hello",
+                    "last_time": created,
+                    "update_time": created,
+                }
+            ]
+        )
+    )
+    repository = ConversationMemoryRepository(engine)
+
+    conversations = repository.list_conversations("user_1", limit=20)
+
+    assert conversations[0].conversation_id == "conv_1"
+    statement = engine.connection.statements[0]
+    assert "FROM t_conversation" in statement.sql
+    assert statement.params["user_id"] == "user_1"
+    assert statement.params["limit"] == 20
+
+
+def test_delete_conversation_soft_deletes_conversation_messages_and_summaries() -> None:
+    engine = FakeEngine()
+    repository = ConversationMemoryRepository(engine)
+
+    repository.delete_conversation("conv_1", "user_1")
+
+    sql = "\n".join(statement.sql for statement in engine.connection.statements)
+    assert "UPDATE t_conversation" in sql
+    assert "UPDATE t_message" in sql
+    assert "UPDATE t_conversation_summary" in sql
+
+
+def test_clear_conversations_soft_deletes_all_user_memory() -> None:
+    engine = FakeEngine()
+    repository = ConversationMemoryRepository(engine)
+
+    repository.clear_conversations("user_1")
+
+    sql = "\n".join(statement.sql for statement in engine.connection.statements)
+    assert "UPDATE t_conversation" in sql
+    assert "UPDATE t_message" in sql
+    assert "UPDATE t_conversation_summary" in sql
+    assert all(
+        statement.params["user_id"] == "user_1"
+        for statement in engine.connection.statements
+    )
+
+

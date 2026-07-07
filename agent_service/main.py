@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
@@ -11,6 +11,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent_service.api.chat import router as chat_router
+from agent_service.api.conversation_memory import router as conversation_memory_router
 from agent_service.api.health import router as health_router
 from agent_service.api.knowledge import router as knowledge_router
 from agent_service.api.knowledge_chunk_dev import router as knowledge_chunk_dev_router
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(chat_router, prefix="/v1/agent")
+    app.include_router(conversation_memory_router, prefix="/v1/agent")
     app.include_router(knowledge_router, prefix="/v1")
     if settings.agent_mock_mode:
         app.include_router(knowledge_chunk_dev_router, prefix="/v1")
@@ -115,3 +117,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

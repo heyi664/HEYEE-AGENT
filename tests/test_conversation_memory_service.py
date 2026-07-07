@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import pytest
 
@@ -194,3 +194,55 @@ async def test_compress_if_needed_merges_pending_and_updates_watermark() -> None
         "msg_5",
     ]
     assert repository.upserts == [("conv_1", "msg_5", "merged summary")]
+
+class DenyingCompressionLock:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def acquire(self, conversation_id: str, user_id: str) -> bool:
+        self.calls.append((conversation_id, user_id))
+        return False
+
+    def release(self, conversation_id: str, user_id: str) -> None:
+        raise AssertionError("release should not be called when acquire fails")
+
+
+@pytest.mark.asyncio
+async def test_compress_if_needed_skips_when_compression_lock_is_not_acquired() -> None:
+    repository = CompressRepository()
+    summary_service = FakeSummaryService()
+    lock = DenyingCompressionLock()
+    service = ConversationMemoryService(
+        repository=repository,
+        summary_service=summary_service,
+        summary_enabled=True,
+        summary_batch_size=2,
+        compression_lock=lock,
+    )
+
+    await service.compress_if_needed("conv_1", "user_1")
+
+    assert lock.calls == [("conv_1", "user_1")]
+    assert summary_service.calls == []
+    assert repository.upserts == []
+
+
+def test_load_trims_context_to_budget_and_keeps_user_start() -> None:
+    repository = FakeMemoryRepository()
+    repository.messages_after = [
+        MemoryMessage(id="msg_1", role="assistant", content="orphan assistant"),
+        MemoryMessage(id="msg_2", role="user", content="first important user message"),
+        MemoryMessage(id="msg_3", role="assistant", content="assistant answer that can be trimmed"),
+        MemoryMessage(id="msg_4", role="user", content="latest user message"),
+    ]
+    service = ConversationMemoryService(
+        repository=repository,
+        summary_enabled=True,
+        max_context_chars=35,
+    )
+
+    context = service.load("conv_1", "user_1")
+
+    assert context.messages[0].role == "user"
+    assert [message.content for message in context.messages] == ["latest user message"]
+

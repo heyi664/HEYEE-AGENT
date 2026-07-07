@@ -1,8 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import time
+from collections.abc import Coroutine
+from typing import Any, cast
 from uuid import uuid4
 
 from agent_service.core.config import get_settings
@@ -22,7 +25,7 @@ class ChatService:
         memory_service: ConversationMemoryService | object | None = None,
     ) -> None:
         self._llm_service = llm_service
-        self._memory_service = memory_service
+        self._memory_service: Any = memory_service
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         settings = get_settings()
@@ -50,7 +53,10 @@ class ChatService:
             memory_service.append(conversation_id, user_id, "assistant", result.reply)
             compression_result = memory_service.compress_if_needed(conversation_id, user_id)
             if inspect.isawaitable(compression_result):
-                await compression_result
+                if settings.memory_async_compress:
+                    self._run_background_compression(compression_result)
+                else:
+                    await compression_result
 
         elapsed_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
@@ -70,7 +76,7 @@ class ChatService:
         self,
         database_url: str | None,
         agent_mock_mode: bool,
-    ) -> ConversationMemoryService | object | None:
+    ) -> Any | None:
         if self._memory_service is not None:
             return self._memory_service
         if agent_mock_mode or not database_url:
@@ -85,6 +91,19 @@ class ChatService:
         ]
         return MemoryContext(messages=messages)
 
+    def _run_background_compression(self, compression_result: object) -> None:
+        coroutine = cast(Coroutine[Any, Any, object], compression_result)
+        task: asyncio.Task[object] = asyncio.create_task(coroutine)
+        task.add_done_callback(self._log_background_compression_result)
+
+    def _log_background_compression_result(self, task: asyncio.Task[object]) -> None:
+        try:
+            task.result()
+        except Exception:
+            logger.exception("background conversation summary compression failed")
+
 
 def get_chat_service() -> ChatService:
     return ChatService(get_llm_service())
+
+

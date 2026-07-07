@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any, cast
 
 from agent_service.db.session import get_engine
-from agent_service.memory.models import MemoryMessage, MemoryRole, MemorySummary
+from agent_service.memory.models import ConversationRecord, MemoryMessage, MemoryRole, MemorySummary
 
 
 class ConversationMemoryRepository:
@@ -190,6 +190,133 @@ class ConversationMemoryRepository:
                 .all()
             )
         return [self._row_to_message(row) for row in rows]
+
+    def list_conversations(self, user_id: str, limit: int = 50) -> list[ConversationRecord]:
+        from sqlalchemy import text
+
+        with self._engine.connect() as conn:
+            rows = (
+                conn.execute(
+                    text(
+                        """
+                        SELECT conversation_id, title, last_time, update_time
+                        FROM t_conversation
+                        WHERE user_id = :user_id
+                          AND deleted = 0
+                        ORDER BY last_time DESC, update_time DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    {"user_id": user_id, "limit": limit},
+                )
+                .mappings()
+                .all()
+            )
+        return [
+            ConversationRecord(
+                conversation_id=str(row["conversation_id"]),
+                title=str(row["title"]) if row.get("title") is not None else None,
+                last_time=row.get("last_time"),
+                update_time=row.get("update_time"),
+            )
+            for row in rows
+        ]
+
+    def list_conversation_messages(self, conversation_id: str, user_id: str) -> list[MemoryMessage]:
+        from sqlalchemy import text
+
+        with self._engine.connect() as conn:
+            rows = (
+                conn.execute(
+                    text(
+                        """
+                        SELECT id, role, content, create_time
+                        FROM t_message
+                        WHERE conversation_id = :conversation_id
+                          AND user_id = :user_id
+                          AND role IN ('user', 'assistant')
+                          AND deleted = 0
+                        ORDER BY create_time ASC
+                        """
+                    ),
+                    {"conversation_id": conversation_id, "user_id": user_id},
+                )
+                .mappings()
+                .all()
+            )
+        return [self._row_to_message(row) for row in rows]
+
+    def delete_conversation(self, conversation_id: str, user_id: str) -> None:
+        from sqlalchemy import text
+
+        params = {"conversation_id": conversation_id, "user_id": user_id}
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE t_conversation
+                    SET deleted = 1, update_time = CURRENT_TIMESTAMP
+                    WHERE conversation_id = :conversation_id AND user_id = :user_id
+                    """
+                ),
+                params,
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE t_message
+                    SET deleted = 1, update_time = CURRENT_TIMESTAMP
+                    WHERE conversation_id = :conversation_id AND user_id = :user_id
+                    """
+                ),
+                params,
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE t_conversation_summary
+                    SET deleted = 1, update_time = CURRENT_TIMESTAMP
+                    WHERE conversation_id = :conversation_id AND user_id = :user_id
+                    """
+                ),
+                params,
+            )
+
+    def clear_conversations(self, user_id: str) -> None:
+        from sqlalchemy import text
+
+        params = {"user_id": user_id}
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE t_conversation
+                    SET deleted = 1, update_time = CURRENT_TIMESTAMP
+                    WHERE user_id = :user_id
+                    """
+                ),
+                params,
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE t_message
+                    SET deleted = 1, update_time = CURRENT_TIMESTAMP
+                    WHERE user_id = :user_id
+                    """
+                ),
+                params,
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE t_conversation_summary
+                    SET deleted = 1, update_time = CURRENT_TIMESTAMP
+                    WHERE user_id = :user_id
+                    """
+                ),
+                params,
+            )
 
     def upsert_summary(
         self,

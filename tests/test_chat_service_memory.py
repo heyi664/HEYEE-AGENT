@@ -1,4 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
+
+import asyncio
 
 import pytest
 
@@ -58,3 +60,38 @@ async def test_chat_service_loads_memory_and_appends_assistant_reply() -> None:
     ]
     assert memory_service.compressed == [("conv_1", "7")]
     assert llm_service.messages[-1] == {"role": "user", "content": "current question"}
+
+class SlowAsyncMemoryService(FakeMemoryService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.compression_started = asyncio.Event()
+        self.compression_released = asyncio.Event()
+
+    async def compress_if_needed(self, conversation_id: str, user_id: str) -> None:
+        self.compressed.append((conversation_id, user_id))
+        self.compression_started.set()
+        await self.compression_released.wait()
+
+
+@pytest.mark.asyncio
+async def test_chat_service_does_not_wait_for_async_memory_compression() -> None:
+    llm_service = FakeLLMService()
+    memory_service = SlowAsyncMemoryService()
+    service = ChatService(llm_service=llm_service, memory_service=memory_service)
+
+    response = await asyncio.wait_for(
+        service.chat(
+            ChatRequest(
+                userId=7,
+                conversationId="conv_1",
+                message="current question",
+                history=[],
+            )
+        ),
+        timeout=0.1,
+    )
+
+    assert response.reply == "assistant reply"
+    await asyncio.wait_for(memory_service.compression_started.wait(), timeout=0.1)
+    memory_service.compression_released.set()
+

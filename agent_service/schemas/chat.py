@@ -25,11 +25,44 @@ class ChatRequest(BaseModel):
         return value.strip()
 
 
+class RagIntentScore(BaseModel):
+    id: str
+    name: str
+    kind: str
+    level: str
+    score: float
+    reason: str | None = None
+    fullPath: str = ""
+    collectionName: str | None = None
+    mcpToolId: str | None = None
+    topK: int | None = None
+
+
+class RagSubIntent(BaseModel):
+    subQuestion: str
+    intents: list[RagIntentScore] = Field(default_factory=list)
+
+
+class RagGuidanceResult(BaseModel):
+    action: str
+    prompt: str | None = None
+
+
+class RagIntentRecognitionResult(BaseModel):
+    originalQuestion: str
+    rewrittenQuestion: str
+    subQuestions: list[str] = Field(default_factory=list)
+    subIntents: list[RagSubIntent] = Field(default_factory=list)
+    kbIntents: list[RagIntentScore] = Field(default_factory=list)
+    mcpIntents: list[RagIntentScore] = Field(default_factory=list)
+    isSystemOnly: bool = False
+    guidance: RagGuidanceResult | None = None
+
+
 class ChatResponse(BaseModel):
     conversationId: str
     reply: str = Field(min_length=1)
     createdAt: str = Field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     sources: list[str] = Field(default_factory=list)
     toolCalls: list[str] = Field(default_factory=list)
-
-
+    ragIntent: RagIntentRecognitionResult | None = None

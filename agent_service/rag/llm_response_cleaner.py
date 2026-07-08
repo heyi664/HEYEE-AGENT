@@ -16,6 +16,19 @@ def parse_json_object(text: str) -> dict[str, Any]:
     return cast(dict[str, Any], parsed)
 
 
+def parse_json_array(text: str) -> list[dict[str, Any]]:
+    cleaned = _strip_code_fence(text.strip())
+    start = cleaned.find("[")
+    end = cleaned.rfind("]")
+    if start >= 0 and end >= start:
+        parsed = json.loads(cleaned[start : end + 1])
+    else:
+        parsed = parse_json_object(cleaned).get("results")
+    if not isinstance(parsed, list):
+        raise ValueError("LLM response must contain a JSON array")
+    return [cast(dict[str, Any], item) for item in parsed if isinstance(item, dict)]
+
+
 def _strip_code_fence(text: str) -> str:
     if not text.startswith("```"):
         return text

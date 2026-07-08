@@ -10,7 +10,12 @@ class FakeRetriever(Retriever):
     def __init__(self) -> None:
         self.queries: list[str] = []
 
-    async def search(self, query: str, top_k: int = 5) -> list[RetrievedSource]:
+    async def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        collection_name: str | None = None,
+    ) -> list[RetrievedSource]:
         self.queries.append(query)
         return [RetrievedSource(title=query, content="content", score=1.0)]
 

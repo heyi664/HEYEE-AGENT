@@ -23,9 +23,11 @@ class ChatService:
         self,
         llm_service: LLMService,
         memory_service: ConversationMemoryService | object | None = None,
+        intent_recognition_pipeline: object | None = None,
     ) -> None:
         self._llm_service = llm_service
         self._memory_service: Any = memory_service
+        self._intent_recognition_pipeline: Any = intent_recognition_pipeline
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         settings = get_settings()
@@ -45,6 +47,10 @@ class ChatService:
             )
         else:
             memory_context = self._context_from_request_history(request)
+
+        rag_intent = None
+        if settings.rag_intent_enabled:
+            rag_intent = await self._recognize_intent(request.message, memory_context.messages)
 
         messages = build_messages(memory_context, request.message)
         result = await self._llm_service.complete(messages)
@@ -70,7 +76,40 @@ class ChatService:
             reply=result.reply,
             sources=[],
             toolCalls=result.tool_calls,
+            ragIntent=rag_intent,
         )
+
+    async def _recognize_intent(
+        self,
+        question: str,
+        history: list[MemoryMessage],
+    ) -> dict[str, Any] | None:
+        pipeline = self._resolve_intent_recognition_pipeline()
+        if pipeline is None:
+            return None
+        try:
+            result = await pipeline.recognize(question, history=history)
+        except Exception:
+            logger.exception("rag intent recognition failed; continue normal chat")
+            return None
+        to_response_dict = getattr(result, "to_response_dict", None)
+        if callable(to_response_dict):
+            return cast(dict[str, Any], to_response_dict())
+        return cast(dict[str, Any] | None, result)
+
+    def _resolve_intent_recognition_pipeline(self) -> Any | None:
+        if self._intent_recognition_pipeline is not None:
+            return self._intent_recognition_pipeline
+        try:
+            from agent_service.rag.intent_recognition_pipeline import (
+                get_intent_recognition_pipeline,
+            )
+
+            self._intent_recognition_pipeline = get_intent_recognition_pipeline()
+        except Exception:
+            logger.exception("rag intent recognition pipeline initialization failed")
+            return None
+        return self._intent_recognition_pipeline
 
     def _resolve_memory_service(
         self,
@@ -105,5 +144,3 @@ class ChatService:
 
 def get_chat_service() -> ChatService:
     return ChatService(get_llm_service())
-
-

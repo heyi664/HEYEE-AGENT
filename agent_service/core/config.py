@@ -65,6 +65,17 @@ class Settings(BaseSettings):
     rag_query_rewrite_history_max_chars: int = Field(default=1500, ge=100, le=10000)
     rag_query_rewrite_history_message_max_chars: int = Field(default=500, ge=50, le=5000)
     rag_term_mapping_cache_ttl_seconds: int = Field(default=300, ge=1)
+    rag_intent_enabled: bool = False
+    rag_intent_min_score: float = Field(default=0.35, ge=0, le=1)
+    rag_max_intent_count: int = Field(default=3, ge=1, le=10)
+    rag_intent_cache_enabled: bool = True
+    rag_intent_cache_ttl_seconds: int = Field(default=604800, ge=60)
+    rag_intent_llm_temperature: float = Field(default=0.1, ge=0, le=2)
+    rag_intent_llm_top_p: float = Field(default=0.3, ge=0, le=1)
+    rag_guidance_enabled: bool = True
+    rag_guidance_score_ratio: float = Field(default=0.8, ge=0, le=1)
+    rag_guidance_margin: float = Field(default=0.15, ge=0, le=1)
+    rag_guidance_max_options: int = Field(default=6, ge=2, le=20)
 
     rustfs_endpoint: str = "http://127.0.0.1:9000"
     rustfs_access_key: str | None = None

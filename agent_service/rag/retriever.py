@@ -6,7 +6,12 @@ from agent_service.rag.schemas import RetrievedSource
 
 
 class Retriever:
-    async def search(self, query: str, top_k: int = 5) -> list[RetrievedSource]:
+    async def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        collection_name: str | None = None,
+    ) -> list[RetrievedSource]:
         return []
 
     async def search_many(self, queries: list[str], top_k: int = 5) -> list[RetrievedSource]:

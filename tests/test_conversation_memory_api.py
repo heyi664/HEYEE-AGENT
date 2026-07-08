@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
@@ -51,3 +51,19 @@ def test_conversation_memory_api_lists_history_and_deletes() -> None:
     assert cleared.status_code == 204
     assert service.deleted == [("conv_1", "7")]
     assert service.cleared == ["7"]
+
+def test_conversation_memory_api_rejects_mismatched_authenticated_user() -> None:
+    app = create_app()
+    service = FakeConversationMemoryService()
+    app.dependency_overrides[get_conversation_memory_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.get(
+        "/v1/agent/conversations",
+        params={"userId": "7"},
+        headers={"X-User-Id": "8"},
+    )
+
+    assert response.status_code == 403
+    assert service.deleted == []
+    assert service.cleared == []

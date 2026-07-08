@@ -1,7 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 from typing import Any, Protocol
+from uuid import uuid4
 
 from agent_service.core.config import get_settings
 
@@ -23,25 +24,37 @@ class NoopSummaryCompressionLock:
 
 
 class RedisSummaryCompressionLock:
+    _RELEASE_SCRIPT = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+end
+return 0
+""".strip()
+
     def __init__(self, redis_url: str | None = None, ttl_seconds: int | None = None) -> None:
         settings = get_settings()
         self._redis_url = redis_url or settings.memory_redis_url
         self._ttl_seconds = ttl_seconds or settings.memory_lock_ttl_seconds
         self._client: object | None = None
+        self._owner_tokens: dict[tuple[str, str], str] = {}
 
     def acquire(self, conversation_id: str, user_id: str) -> bool:
         if not self._redis_url:
             return True
         try:
             client = self._get_client()
-            return bool(
+            owner_token = uuid4().hex
+            acquired = bool(
                 client.set(
                     self._key(conversation_id, user_id),
-                    "1",
+                    owner_token,
                     nx=True,
                     ex=self._ttl_seconds,
                 )
             )
+            if acquired:
+                self._owner_tokens[(conversation_id, user_id)] = owner_token
+            return acquired
         except Exception:
             logger.exception(
                 "redis summary compression lock acquire failed conversationId=%s userId=%s",
@@ -53,8 +66,16 @@ class RedisSummaryCompressionLock:
     def release(self, conversation_id: str, user_id: str) -> None:
         if not self._redis_url:
             return
+        owner_token = self._owner_tokens.pop((conversation_id, user_id), None)
+        if not owner_token:
+            return
         try:
-            self._get_client().delete(self._key(conversation_id, user_id))
+            self._get_client().eval(
+                self._RELEASE_SCRIPT,
+                1,
+                self._key(conversation_id, user_id),
+                owner_token,
+            )
         except Exception:
             logger.exception(
                 "redis summary compression lock release failed conversationId=%s userId=%s",
@@ -74,5 +95,3 @@ class RedisSummaryCompressionLock:
 
     def _key(self, conversation_id: str, user_id: str) -> str:
         return f"heyee:conversation-summary-lock:{user_id}:{conversation_id}"
-
-

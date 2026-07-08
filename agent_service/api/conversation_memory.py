@@ -1,9 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Path, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Response, status
 from pydantic import BaseModel
 
 from agent_service.memory.conversation_memory_service import ConversationMemoryService
@@ -29,9 +29,18 @@ def get_conversation_memory_service() -> ConversationMemoryService:
     return ConversationMemoryService()
 
 
+def resolve_request_user_id(
+    userId: str = Query(..., min_length=1),
+    authenticated_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> str:
+    if authenticated_user_id is not None and authenticated_user_id != userId:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    return userId
+
+
 @router.get("/conversations", response_model=list[ConversationSummaryResponse])
 def list_conversations(
-    userId: str = Query(..., min_length=1),
+    user_id: str = Depends(resolve_request_user_id),
     limit: int = Query(default=50, ge=1, le=200),
     service: ConversationMemoryService = Depends(get_conversation_memory_service),
 ) -> list[ConversationSummaryResponse]:
@@ -42,7 +51,7 @@ def list_conversations(
             lastTime=item.last_time,
             updateTime=item.update_time,
         )
-        for item in service.list_conversations(userId, limit)
+        for item in service.list_conversations(user_id, limit)
     ]
 
 
@@ -52,7 +61,7 @@ def list_conversations(
 )
 def list_conversation_messages(
     conversation_id: str = Path(..., min_length=1),
-    userId: str = Query(..., min_length=1),
+    user_id: str = Depends(resolve_request_user_id),
     service: ConversationMemoryService = Depends(get_conversation_memory_service),
 ) -> list[ConversationMessageResponse]:
     return [
@@ -62,26 +71,24 @@ def list_conversation_messages(
             content=item.content,
             createTime=item.create_time,
         )
-        for item in service.list_history(conversation_id, userId)
+        for item in service.list_history(conversation_id, user_id)
     ]
 
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_conversation(
     conversation_id: str,
-    userId: str = Query(..., min_length=1),
+    user_id: str = Depends(resolve_request_user_id),
     service: ConversationMemoryService = Depends(get_conversation_memory_service),
 ) -> Response:
-    service.delete_conversation(conversation_id, userId)
+    service.delete_conversation(conversation_id, user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete("/conversations", status_code=status.HTTP_204_NO_CONTENT)
 def clear_conversations(
-    userId: str = Query(..., min_length=1),
+    user_id: str = Depends(resolve_request_user_id),
     service: ConversationMemoryService = Depends(get_conversation_memory_service),
 ) -> Response:
-    service.clear_conversations(userId)
+    service.clear_conversations(user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-

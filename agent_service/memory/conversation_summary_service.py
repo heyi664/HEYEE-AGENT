@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+from typing import Protocol
+
 from agent_service.memory.models import MemoryMessage
-from agent_service.services.llm_service import LLMService, get_llm_service
+from agent_service.services.llm_service import LLMResult, get_llm_service
+
+
+class SummaryLLMService(Protocol):
+    async def complete(self, messages: list[dict[str, str]]) -> LLMResult: ...
 
 
 class ConversationSummaryService:
     def __init__(
         self,
-        llm_service: LLMService | object | None = None,
+        llm_service: SummaryLLMService | None = None,
         max_chars: int = 300,
     ) -> None:
         self._llm_service = llm_service or get_llm_service()
@@ -41,5 +47,4 @@ class ConversationSummaryService:
             },
         ]
         result = await self._llm_service.complete(messages)
-        return result.reply.strip()
-
+        return str(result.reply).strip()

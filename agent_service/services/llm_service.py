@@ -22,7 +22,11 @@ class LLMService:
     def __init__(self, registry: ToolRegistry | None = None) -> None:
         self._registry = registry or tool_registry
 
-    async def complete(self, messages: list[dict[str, str]]) -> LLMResult:
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        use_tools: bool = True,
+    ) -> LLMResult:
         settings = get_settings()
         if settings.agent_mock_mode:
             user_message = messages[-1]["content"] if messages else ""
@@ -38,6 +42,7 @@ class LLMService:
             result = await FunctionCallService(self._registry).complete(
                 messages,
                 settings.agent_max_steps,
+                use_tools=use_tools,
             )
         except FunctionCallingUnavailable as exc:
             raise ModelUnavailableError(

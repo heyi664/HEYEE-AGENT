@@ -6,6 +6,7 @@ IMAGE_NAME="${IMAGE_NAME:-heyee-agent:latest}"
 API_CONTAINER="${API_CONTAINER:-heyee-agent-api}"
 CONSUMER_CONTAINER="${CONSUMER_CONTAINER:-heyee-agent-consumer}"
 ENV_FILE="${ENV_FILE:-.env}"
+PULL_LATEST="${PULL_LATEST:-true}"
 
 log() {
   printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -38,24 +39,24 @@ if [[ ! -f Dockerfile ]]; then
   exit 1
 fi
 
-log "Git status before pull"
-git status --short
+if [[ "$PULL_LATEST" == "true" ]]; then
+  log "Git status before pull"
+  git status --short
 
-log "Pulling latest code"
-git pull
+  log "Pulling latest code"
+  git pull --ff-only
+fi
 
 log "Building Docker image: ${IMAGE_NAME}"
 docker build --network=host -t "$IMAGE_NAME" .
 
-log "Removing old containers"
-docker rm -f "$API_CONTAINER" "$CONSUMER_CONTAINER" 2>/dev/null || true
-
-log "Starting API container"
-docker run -d --name "$API_CONTAINER" --network=host --env-file "$ENV_FILE" "$IMAGE_NAME"
-
-log "Starting consumer container"
-docker run -d --name "$CONSUMER_CONTAINER" --network=host --env-file "$ENV_FILE" "$IMAGE_NAME" \
-  python -m agent_service.consumers.run_knowledge_chunk_consumer
+log "Recreating application containers"
+APP_DIR="$APP_DIR" \
+IMAGE_NAME="$IMAGE_NAME" \
+API_CONTAINER="$API_CONTAINER" \
+CONSUMER_CONTAINER="$CONSUMER_CONTAINER" \
+ENV_FILE="$ENV_FILE" \
+  bash scripts/recreate-heyee-agent-with-env.sh
 
 log "Checking containers"
 docker ps --filter "name=${API_CONTAINER}" --filter "name=${CONSUMER_CONTAINER}"
@@ -65,9 +66,5 @@ docker logs --tail=80 "$API_CONTAINER"
 
 log "Consumer logs"
 docker logs --tail=80 "$CONSUMER_CONTAINER"
-
-log "Health check"
-curl -fsS http://127.0.0.1:8000/health
-printf '\n'
 
 log "Deploy completed successfully"

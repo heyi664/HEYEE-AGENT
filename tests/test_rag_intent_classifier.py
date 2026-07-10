@@ -12,7 +12,12 @@ class FakeLLM:
         self.reply = reply
         self.messages: list[list[dict[str, str]]] = []
 
-    async def complete(self, messages: list[dict[str, str]]) -> LLMResult:
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        use_tools: bool = True,
+    ) -> LLMResult:
+        assert use_tools is False
         self.messages.append(messages)
         return LLMResult(reply=self.reply)
 

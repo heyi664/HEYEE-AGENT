@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import inspect
@@ -53,7 +53,7 @@ class ChatService:
             rag_intent = await self._recognize_intent(request.message, memory_context.messages)
 
         messages = build_messages(memory_context, request.message)
-        result = await self._llm_service.complete(messages)
+        result = await self._llm_service.complete(messages, use_tools=False)
 
         if settings.memory_enabled and memory_service is not None:
             memory_service.append(conversation_id, user_id, "assistant", result.reply)

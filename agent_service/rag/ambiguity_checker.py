@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from agent_service.rag.intent_models import NodeScore
 from agent_service.rag.llm_response_cleaner import parse_json_object
@@ -27,7 +27,10 @@ class AmbiguityLLMChecker:
                     "candidates": _build_candidates_text(ranked),
                 },
             )
-            result = await self._llm_service.complete([{"role": "user", "content": prompt}])
+            result = await self._llm_service.complete(
+                [{"role": "user", "content": prompt}],
+                use_tools=False,
+            )
             parsed = parse_json_object(result.reply)
             return bool(parsed.get("ambiguous"))
         except Exception:

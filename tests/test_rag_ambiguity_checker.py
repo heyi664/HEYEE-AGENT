@@ -11,7 +11,12 @@ class FakeLLM:
     def __init__(self, reply: str | Exception) -> None:
         self.reply = reply
 
-    async def complete(self, messages: list[dict[str, str]]) -> LLMResult:
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        use_tools: bool = True,
+    ) -> LLMResult:
+        assert use_tools is False
         if isinstance(self.reply, Exception):
             raise self.reply
         return LLMResult(reply=self.reply)

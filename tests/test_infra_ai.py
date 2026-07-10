@@ -212,6 +212,47 @@ async def test_openai_compatible_chat_client_posts_openai_style_request() -> Non
 
 
 @pytest.mark.asyncio
+async def test_openai_compatible_chat_client_retries_transient_transport_errors() -> None:
+    attempts = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise httpx.RemoteProtocolError(
+                "Server disconnected without sending a response.",
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "Recovered"}}]},
+        )
+
+    target = ModelTarget(
+        id="qwen3-flash",
+        capability=ModelCapability.CHAT,
+        candidate=ModelCandidate(
+            id="qwen3-flash",
+            provider="bailian",
+            model="qwen3-flash",
+        ),
+        provider=ProviderConfig(
+            name="bailian",
+            url="https://dashscope.example.com",
+            api_key="sk-test",
+            endpoints={"chat": "/compatible-mode/v1/chat/completions"},
+        ),
+    )
+
+    turn = await OpenAICompatibleChatModelClient(
+        transport=httpx.MockTransport(handler)
+    ).complete_turn(target, [{"role": "user", "content": "Hello"}], [])
+
+    assert attempts == 3
+    assert turn.content == "Recovered"
+
+
+@pytest.mark.asyncio
 async def test_openai_compatible_chat_client_sends_tool_schema_and_parses_tool_calls() -> None:
     captured: dict[str, object] = {}
 

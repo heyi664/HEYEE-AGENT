@@ -214,11 +214,18 @@ class AbstractOpenAIStyleChatModelClient:
                 transport=self._transport,
                 trust_env=False,
             ) as client:
-                response = await client.post(
-                    resolve_model_url(target),
-                    json=payload,
-                    headers=headers,
-                )
+                for attempt in range(3):
+                    try:
+                        response = await client.post(
+                            resolve_model_url(target),
+                            json=payload,
+                            headers=headers,
+                        )
+                        break
+                    except httpx.TransportError:
+                        if attempt == 2:
+                            raise
+                        await asyncio.sleep(0.25 * (2**attempt))
         except httpx.HTTPError as exc:
             raise ModelUnavailableError(str(exc)) from exc
         except ValueError as exc:

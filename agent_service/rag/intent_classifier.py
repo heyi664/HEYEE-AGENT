@@ -36,7 +36,8 @@ class IntentClassifier:
             [
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": question},
-            ]
+            ],
+            use_tools=False,
         )
         scores = _parse_scores(result.reply, tree)
         scores.sort(key=lambda item: item.score, reverse=True)

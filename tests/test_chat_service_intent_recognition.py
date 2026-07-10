@@ -9,7 +9,12 @@ from agent_service.services.llm_service import LLMResult
 
 
 class FakeLLMService:
-    async def complete(self, messages: list[dict[str, str]]) -> LLMResult:
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        use_tools: bool = True,
+    ) -> LLMResult:
+        assert use_tools is False
         return LLMResult(reply="assistant reply")
 
 

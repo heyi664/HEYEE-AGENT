@@ -47,9 +47,10 @@ class FunctionCallService:
         self,
         messages: list[dict[str, str]],
         max_steps: int,
+        use_tools: bool = True,
     ) -> FunctionCallResult:
         conversation: list[dict[str, Any]] = [dict(message) for message in messages]
-        schemas = self._registry.function_schemas()
+        schemas = self._registry.function_schemas() if use_tools else []
         summaries: list[str] = []
 
         if schemas:

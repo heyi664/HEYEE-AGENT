@@ -14,7 +14,12 @@ class FakeLLMService:
     def __init__(self) -> None:
         self.messages: list[dict[str, str]] = []
 
-    async def complete(self, messages: list[dict[str, str]]) -> LLMResult:
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        use_tools: bool = True,
+    ) -> LLMResult:
+        assert use_tools is False
         self.messages = messages
         return LLMResult(reply="assistant reply")
 

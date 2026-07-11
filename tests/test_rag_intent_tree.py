@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from agent_service.rag.intent_models import IntentKind, IntentLevel, IntentNodeRecord
 from agent_service.rag.intent_tree import build_intent_tree
 
@@ -65,3 +67,17 @@ def test_build_intent_tree_keeps_orphan_as_root() -> None:
     assert tree.id_to_node["orphan-topic"].parent is None
     assert tree.id_to_node["orphan-topic"].full_path == "孤儿节点"
     assert tree.id_to_node["orphan-topic"].is_system()
+
+
+def test_return_policy_seed_defines_a_routable_kb_leaf() -> None:
+    seed = (
+        Path(__file__).resolve().parents[1]
+        / "sql"
+        / "20260711_seed_intent_node_demo.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "product-service" in seed
+    assert "general-products" in seed
+    assert "general-return-policy" in seed
+    assert "test111" in seed
+    assert "退换政策是什么" in seed

@@ -14,8 +14,6 @@ INSERT INTO t_intent_node (
     kind,
     sort_order,
     enabled,
-    created_by,
-    updated_by,
     deleted
 )
 VALUES
@@ -33,8 +31,6 @@ VALUES
         0,
         100,
         1,
-        'system',
-        'system',
         0
     ),
     (
@@ -51,8 +47,6 @@ VALUES
         0,
         110,
         1,
-        'system',
-        'system',
         0
     ),
     (
@@ -69,8 +63,6 @@ VALUES
         0,
         120,
         1,
-        'system',
-        'system',
         0
     )
 ON CONFLICT (intent_code) DO UPDATE
@@ -85,9 +77,8 @@ SET
     kind = EXCLUDED.kind,
     sort_order = EXCLUDED.sort_order,
     enabled = EXCLUDED.enabled,
-    updated_by = EXCLUDED.updated_by,
     update_time = CURRENT_TIMESTAMP,
     deleted = EXCLUDED.deleted
-WHERE t_intent_node.created_by = 'system';
+WHERE t_intent_node.id = EXCLUDED.id;
 
 COMMIT;

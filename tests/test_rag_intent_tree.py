@@ -81,3 +81,7 @@ def test_return_policy_seed_defines_a_routable_kb_leaf() -> None:
     assert "general-return-policy" in seed
     assert "test111" in seed
     assert "退换政策是什么" in seed
+    assert "create_by" not in seed
+    assert "update_by" not in seed
+    assert "created_by" not in seed
+    assert "updated_by" not in seed

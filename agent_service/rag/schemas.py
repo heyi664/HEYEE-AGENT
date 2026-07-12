@@ -15,6 +15,7 @@ class RetrievedSource(BaseModel):
     score: float | None = None
     source_type: str | None = None
     url: str | None = None
+    collection_name: str | None = None
 
 
 class RewriteResult(BaseModel):

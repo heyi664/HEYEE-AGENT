@@ -59,10 +59,19 @@ class RagIntentRecognitionResult(BaseModel):
     guidance: RagGuidanceResult | None = None
 
 
+class ChatSource(BaseModel):
+    title: str
+    content: str
+    score: float | None = None
+    sourceType: str | None = None
+    url: str | None = None
+    collectionName: str | None = None
+
+
 class ChatResponse(BaseModel):
     conversationId: str
     reply: str = Field(min_length=1)
     createdAt: str = Field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
-    sources: list[str] = Field(default_factory=list)
+    sources: list[ChatSource] = Field(default_factory=list)
     toolCalls: list[str] = Field(default_factory=list)
     ragIntent: RagIntentRecognitionResult | None = None

@@ -70,6 +70,18 @@ def test_chat_page_displays_rag_intent_for_assistant_responses() -> None:
     assert "ragIntent.mcpIntents" in page.text
 
 
+def test_chat_page_displays_retrieved_sources_for_assistant_responses() -> None:
+    client = TestClient(create_app())
+
+    page = client.get("/ui/chat.html")
+
+    assert page.status_code == 200
+    assert "sources: data && data.sources" in page.text
+    assert 'v-if="m.sources && m.sources.length"' in page.text
+    assert "source.collectionName" in page.text
+    assert "source.channel" in page.text
+
+
 def test_chat_page_allows_time_for_multi_stage_rag_processing() -> None:
     client = TestClient(create_app())
 

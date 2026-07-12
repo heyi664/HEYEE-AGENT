@@ -109,6 +109,16 @@
                 {{m.ragIntent.guidance.prompt}}
               </div>
             </div>
+            <div class="source-trace" v-if="m.sources && m.sources.length">
+              <div class="source-trace-title"><i class="el-icon-document"></i> Knowledge sources</div>
+              <div class="source-trace-item" v-for="source in m.sources" :key="source.id || source.url || source.title">
+                <div class="source-trace-meta">
+                  <strong>{{source.title}}</strong>
+                  <span>{{[source.collectionName, source.channel].filter(Boolean).join(" · ")}}</span>
+                </div>
+                <p>{{source.content}}</p>
+              </div>
+            </div>
             <div class="message-time">{{m.time}}</div>
           </div>
           <div class="avatar user-avatar" v-if="m.role === 'user'"><i class="el-icon-user"></i></div>
@@ -271,6 +281,7 @@
             role: "assistant",
             content: reply,
             ragIntent: data && data.ragIntent ? data.ragIntent : null,
+            sources: data && data.sources ? data.sources : [],
             time: this.nowTime()
           });
           this.persistMessages();

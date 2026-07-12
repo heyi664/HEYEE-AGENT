@@ -531,6 +531,55 @@ button {
     color: #765922;
 }
 
+.source-trace {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-left: 3px solid #4d8cab;
+    background: #f4f8fa;
+    color: #3d4750;
+    font-size: 12px;
+    line-height: 18px;
+}
+
+.source-trace-title {
+    margin-bottom: 6px;
+    color: #2d637d;
+    font-weight: 700;
+}
+
+.source-trace-item + .source-trace-item {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #dce7ec;
+}
+
+.source-trace-meta {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.source-trace-meta strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.source-trace-meta span {
+    flex: 0 0 auto;
+    color: #71808b;
+    font-size: 11px;
+}
+
+.source-trace-item p {
+    margin: 3px 0 0;
+    color: #5f6972;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 .message-row.user .message-time {
     color: rgba(255, 255, 255, 0.72);
 }

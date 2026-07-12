@@ -10,12 +10,14 @@ class RetrievedChunk(BaseModel):
 
 
 class RetrievedSource(BaseModel):
+    id: str | None = None
     title: str
     content: str
     score: float | None = None
     source_type: str | None = None
     url: str | None = None
     collection_name: str | None = None
+    channel: str | None = None
 
 
 class RewriteResult(BaseModel):

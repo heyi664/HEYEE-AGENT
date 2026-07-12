@@ -47,22 +47,30 @@ class FakeIntentPipeline:
         )
 
 
-class FakeIntentDirectedRetriever:
+class FakeRetrievalPipeline:
     def __init__(self) -> None:
         self.calls = []
 
-    async def search(self, sub_intents, *, fallback_queries, top_k=5):
-        self.calls.append((sub_intents, fallback_queries, top_k))
-        return [
-            RetrievedSource(
-                title="return-policy.md",
-                content="Eligible items may be returned within seven days.",
-                score=0.93,
-                source_type="knowledge_base",
-                url="rustfs://test111/return-policy.md",
-                collection_name="test111",
-            )
-        ]
+    async def retrieve(self, context):
+        self.calls.append(context)
+        return type(
+            "RetrievalResult",
+            (),
+            {
+                "sources": [
+                    RetrievedSource(
+                        id="chunk-1",
+                        title="return-policy.md",
+                        content="Eligible items may be returned within seven days.",
+                        score=0.93,
+                        source_type="knowledge_base",
+                        url="rustfs://test111/return-policy.md",
+                        collection_name="test111",
+                        channel="intent_directed",
+                    )
+                ]
+            },
+        )()
 
 
 class FakeKbIntentPipeline:
@@ -119,12 +127,12 @@ async def test_chat_service_outputs_rag_intent_when_enabled(monkeypatch) -> None
 async def test_chat_service_uses_kb_intents_to_ground_prompt_and_sources(monkeypatch) -> None:
     monkeypatch.setenv("RAG_INTENT_ENABLED", "true")
     llm_service = FakeLLMService()
-    directed_retriever = FakeIntentDirectedRetriever()
+    retrieval_pipeline = FakeRetrievalPipeline()
     service = ChatService(
         llm_service=llm_service,
         memory_service=None,
         intent_recognition_pipeline=FakeKbIntentPipeline(),
-        intent_directed_retriever=directed_retriever,
+        retrieval_pipeline=retrieval_pipeline,
     )
 
     response = await service.chat(
@@ -136,7 +144,10 @@ async def test_chat_service_uses_kb_intents_to_ground_prompt_and_sources(monkeyp
         )
     )
 
-    assert directed_retriever.calls[0][1] == ["return policy"]
+    assert retrieval_pipeline.calls[0].question == "return policy"
+    assert retrieval_pipeline.calls[0].fallback_queries == ["return policy"]
     assert "Eligible items may be returned within seven days." in llm_service.messages[0]["content"]
     assert response.sources[0].title == "return-policy.md"
+    assert response.sources[0].id == "chunk-1"
     assert response.sources[0].collectionName == "test111"
+    assert response.sources[0].channel == "intent_directed"

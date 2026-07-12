@@ -63,6 +63,7 @@ class PgvectorKnowledgeRepository:
                 text(
                     """
                     SELECT
+                        v.chunk_id,
                         d.doc_name,
                         d.file_url,
                         d.source_type,
@@ -93,6 +94,7 @@ class PgvectorKnowledgeRepository:
             ).mappings()
             return [
                 RetrievedSource(
+                    id=str(row["chunk_id"]),
                     title=str(row["doc_name"]),
                     content=str(row["content"]),
                     score=float(row["score"]) if row["score"] is not None else None,
@@ -103,6 +105,34 @@ class PgvectorKnowledgeRepository:
                     ),
                     url=str(row["file_url"]) if row["file_url"] is not None else None,
                     collection_name=knowledge_base.collection_name,
+                )
+                for row in rows
+            ]
+
+    def list_knowledge_bases(self) -> list[KnowledgeBaseEmbedding]:
+        from sqlalchemy import text
+
+        with get_engine().connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT id, collection_name, embedding_model
+                    FROM t_knowledge_base
+                    WHERE deleted = 0
+                    ORDER BY id
+                    """
+                )
+            ).mappings()
+            return [
+                KnowledgeBaseEmbedding(
+                    kb_id=str(row["id"]),
+                    collection_name=str(row["collection_name"]),
+                    embedding_model=(
+                        str(row["embedding_model"]).strip()
+                        if row["embedding_model"] is not None
+                        and str(row["embedding_model"]).strip()
+                        else None
+                    ),
                 )
                 for row in rows
             ]
@@ -138,6 +168,41 @@ class PgvectorRetriever(Retriever):
 
         query_vector = await self._embedding_service.embed(
             cleaned_query,
+            model_id=knowledge_base.embedding_model,
+        )
+        return await asyncio.to_thread(
+            self._repository.search,
+            knowledge_base=knowledge_base,
+            query_vector=query_vector,
+            top_k=top_k,
+        )
+
+    async def search_global(self, query: str, top_k: int = 5) -> list[RetrievedSource]:
+        cleaned_query = query.strip()
+        if not cleaned_query or top_k <= 0:
+            return []
+        knowledge_bases = await asyncio.to_thread(self._repository.list_knowledge_bases)
+        tasks = [
+            self._search_knowledge_base(cleaned_query, item, top_k)
+            for item in knowledge_bases
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        sources = [
+            source
+            for result in results
+            if not isinstance(result, Exception)
+            for source in result
+        ]
+        return sorted(sources, key=lambda item: item.score or 0.0, reverse=True)[:top_k]
+
+    async def _search_knowledge_base(
+        self,
+        query: str,
+        knowledge_base: KnowledgeBaseEmbedding,
+        top_k: int,
+    ) -> list[RetrievedSource]:
+        query_vector = await self._embedding_service.embed(
+            query,
             model_id=knowledge_base.embedding_model,
         )
         return await asyncio.to_thread(

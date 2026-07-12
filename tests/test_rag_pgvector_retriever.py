@@ -32,6 +32,9 @@ class FakeVectorRepository:
             return None
         return self.collection
 
+    def list_knowledge_bases(self) -> list[KnowledgeBaseEmbedding]:
+        return [self.collection] if self.collection is not None else []
+
     def search(
         self,
         *,
@@ -86,3 +89,19 @@ async def test_pgvector_retriever_skips_unknown_collection_without_embedding() -
     assert sources == []
     assert embedding_service.calls == []
     assert repository.calls == []
+
+
+@pytest.mark.asyncio
+async def test_pgvector_retriever_searches_every_active_knowledge_base_globally() -> None:
+    embedding_service = FakeEmbeddingService()
+    repository = FakeVectorRepository()
+    retriever = PgvectorRetriever(
+        embedding_service=embedding_service,
+        repository=repository,
+    )
+
+    sources = await retriever.search_global("return policy", top_k=2)
+
+    assert embedding_service.calls == [("return policy", "BAAI/bge-m3")]
+    assert repository.calls == [("kb-return", [0.1, 0.2, 0.3], 2)]
+    assert [source.id for source in sources] == [None]

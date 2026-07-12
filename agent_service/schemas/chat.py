@@ -60,12 +60,14 @@ class RagIntentRecognitionResult(BaseModel):
 
 
 class ChatSource(BaseModel):
+    id: str | None = None
     title: str
     content: str
     score: float | None = None
     sourceType: str | None = None
     url: str | None = None
     collectionName: str | None = None
+    channel: str | None = None
 
 
 class ChatResponse(BaseModel):

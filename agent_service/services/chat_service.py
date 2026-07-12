@@ -25,12 +25,12 @@ class ChatService:
         llm_service: LLMService,
         memory_service: ConversationMemoryService | object | None = None,
         intent_recognition_pipeline: object | None = None,
-        intent_directed_retriever: object | None = None,
+        retrieval_pipeline: object | None = None,
     ) -> None:
         self._llm_service = llm_service
         self._memory_service: Any = memory_service
         self._intent_recognition_pipeline: Any = intent_recognition_pipeline
-        self._intent_directed_retriever: Any = intent_directed_retriever
+        self._retrieval_pipeline: Any = retrieval_pipeline
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         settings = get_settings()
@@ -120,8 +120,8 @@ class ChatService:
     async def _retrieve_knowledge(self, intent_result: Any | None) -> list[RetrievedSource]:
         if not self._has_kb_intents(intent_result):
             return []
-        retriever = self._resolve_intent_directed_retriever()
-        if retriever is None:
+        pipeline = self._resolve_retrieval_pipeline()
+        if pipeline is None:
             return []
         rewrite_result = getattr(intent_result, "rewrite_result", None)
         sub_intents = getattr(intent_result, "sub_intents", None)
@@ -131,38 +131,48 @@ class ChatService:
         if not fallback_queries:
             fallback_queries = [str(getattr(rewrite_result, "rewritten_question", ""))]
         try:
-            return await retriever.search(
-                sub_intents,
-                fallback_queries=fallback_queries,
+            from agent_service.rag.retrieval_pipeline import RetrievalContext
+
+            settings = get_settings()
+            result = await pipeline.retrieve(
+                RetrievalContext(
+                    question=str(getattr(rewrite_result, "rewritten_question", "")).strip(),
+                    sub_intents=sub_intents,
+                    fallback_queries=fallback_queries,
+                    candidate_top_k=settings.rag_retrieval_candidate_top_k,
+                    final_top_k=settings.rag_retrieval_final_top_k,
+                )
             )
+            return result.sources
         except Exception:
-            logger.exception("intent-directed knowledge retrieval failed")
+            logger.exception("knowledge retrieval pipeline failed")
             return []
 
     def _has_kb_intents(self, intent_result: Any | None) -> bool:
         return bool(getattr(intent_result, "kb_intents", None))
 
-    def _resolve_intent_directed_retriever(self) -> Any | None:
-        if self._intent_directed_retriever is not None:
-            return self._intent_directed_retriever
+    def _resolve_retrieval_pipeline(self) -> Any | None:
+        if self._retrieval_pipeline is not None:
+            return self._retrieval_pipeline
         try:
-            from agent_service.rag.intent_directed_retriever import IntentDirectedRetriever
-            from agent_service.rag.pgvector_retriever import PgvectorRetriever
+            from agent_service.rag.retrieval_service import get_multi_channel_retriever
 
-            self._intent_directed_retriever = IntentDirectedRetriever(PgvectorRetriever())
+            self._retrieval_pipeline = get_multi_channel_retriever()
         except Exception:
-            logger.exception("intent-directed retriever initialization failed")
+            logger.exception("knowledge retrieval pipeline initialization failed")
             return None
-        return self._intent_directed_retriever
+        return self._retrieval_pipeline
 
     def _to_chat_source(self, source: RetrievedSource) -> ChatSource:
         return ChatSource(
+            id=source.id,
             title=source.title,
             content=source.content,
             score=source.score,
             sourceType=source.source_type,
             url=source.url,
             collectionName=source.collection_name,
+            channel=source.channel,
         )
 
     def _resolve_intent_recognition_pipeline(self) -> Any | None:

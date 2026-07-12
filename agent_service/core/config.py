@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     rag_guidance_score_ratio: float = Field(default=0.8, ge=0, le=1)
     rag_guidance_margin: float = Field(default=0.15, ge=0, le=1)
     rag_guidance_max_options: int = Field(default=6, ge=2, le=20)
+    rag_retrieval_candidate_top_k: int = Field(default=10, ge=1, le=100)
+    rag_retrieval_final_top_k: int = Field(default=5, ge=1, le=20)
+    rag_retrieval_keyword_enabled: bool = False
+    rag_retrieval_global_vector_enabled: bool = False
+    rag_retrieval_rerank_enabled: bool = True
 
     rustfs_endpoint: str = "http://127.0.0.1:9000"
     rustfs_access_key: str | None = None

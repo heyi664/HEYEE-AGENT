@@ -85,3 +85,5 @@ def test_return_policy_seed_defines_a_routable_kb_leaf() -> None:
     assert "update_by" not in seed
     assert "created_by" not in seed
     assert "updated_by" not in seed
+    assert "ON CONFLICT" not in seed
+    assert "NOT EXISTS" in seed

@@ -473,6 +473,64 @@ button {
     color: #a3a8b2;
 }
 
+.intent-trace {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px solid #dfe6ed;
+    border-radius: 6px;
+    background: #f7fafc;
+    color: #434a54;
+    font-size: 12px;
+    line-height: 18px;
+}
+
+.intent-trace-title {
+    margin-bottom: 7px;
+    color: #2d637d;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.intent-trace-row {
+    display: grid;
+    grid-template-columns: 58px minmax(0, 1fr);
+    gap: 8px;
+    padding: 3px 0;
+}
+
+.intent-trace-row > span {
+    color: #7c8490;
+}
+
+.intent-trace-row strong {
+    color: #39414c;
+    font-weight: 500;
+    word-break: break-word;
+}
+
+.intent-trace-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.intent-trace-tag {
+    padding: 2px 6px;
+    border: 1px solid #c8dde7;
+    border-radius: 4px;
+    background: #edf7fa;
+    color: #28627b;
+    font-size: 11px;
+    line-height: 16px;
+}
+
+.intent-trace-guidance {
+    margin-top: 7px;
+    padding-top: 7px;
+    border-top: 1px solid #dfe6ed;
+    color: #765922;
+}
+
 .message-row.user .message-time {
     color: rgba(255, 255, 255, 0.72);
 }

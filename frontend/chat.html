@@ -87,6 +87,28 @@
               v-else
               v-html="renderMarkdown(m.content)"
             ></div>
+            <div class="intent-trace" v-if="m.ragIntent">
+              <div class="intent-trace-title"><i class="el-icon-connection"></i> 意向识别</div>
+              <div class="intent-trace-row">
+                <span>改写问题</span>
+                <strong>{{m.ragIntent.rewrittenQuestion}}</strong>
+              </div>
+              <div class="intent-trace-row" v-if="m.ragIntent.subQuestions && m.ragIntent.subQuestions.length">
+                <span>子问题</span>
+                <strong>{{m.ragIntent.subQuestions.join("；")}}</strong>
+              </div>
+              <div class="intent-trace-row" v-if="intentScores(m.ragIntent).length">
+                <span>命中意向</span>
+                <div class="intent-trace-tags">
+                  <span class="intent-trace-tag" v-for="item in intentScores(m.ragIntent)" :key="item.id">
+                    {{formatIntentScore(item)}}
+                  </span>
+                </div>
+              </div>
+              <div class="intent-trace-guidance" v-if="m.ragIntent.guidance && m.ragIntent.guidance.prompt">
+                {{m.ragIntent.guidance.prompt}}
+              </div>
+            </div>
             <div class="message-time">{{m.time}}</div>
           </div>
           <div class="avatar user-avatar" v-if="m.role === 'user'"><i class="el-icon-user"></i></div>
@@ -144,7 +166,7 @@
 <script src="./js/element.js"></script>
 <script>
   const STORAGE_KEY = "hyeee_ai_chat_messages";
-  axios.defaults.timeout = 30000;
+  axios.defaults.timeout = 180000;
 
   const app = new Vue({
     el: "#app",
@@ -239,13 +261,18 @@
           conversationId: this.conversationId,
           message: content,
           history: this.messages.slice(-10).map(m => ({ role: m.role, content: m.content }))
-        }, { timeout: 30000 }).then(({data}) => {
+        }, { timeout: 180000 }).then(({data}) => {
           const reply = data && data.reply ? data.reply : "我已经收到你的问题，但后端暂时没有返回回复内容。";
           if (data && data.conversationId) {
             this.conversationId = data.conversationId;
             sessionStorage.setItem("hyeee_ai_conversation_id", this.conversationId);
           }
-          this.messages.push({ role: "assistant", content: reply, time: this.nowTime() });
+          this.messages.push({
+            role: "assistant",
+            content: reply,
+            ragIntent: data && data.ragIntent ? data.ragIntent : null,
+            time: this.nowTime()
+          });
           this.persistMessages();
         }).catch(err => {
           this.messages.push({
@@ -273,6 +300,16 @@
         return window.DOMPurify.sanitize(rendered, {
           USE_PROFILES: { html: true }
         });
+      },
+      intentScores(ragIntent) {
+        if (!ragIntent) return [];
+        return (ragIntent.kbIntents || []).concat(ragIntent.mcpIntents || []);
+      },
+      formatIntentScore(item) {
+        const source = item.kind === "MCP" ? "工具" : "知识库";
+        const path = item.fullPath || item.name || item.id;
+        const score = typeof item.score === "number" ? Math.round(item.score * 100) + "%" : "";
+        return [source, path, score].filter(Boolean).join(" · ");
       },
       nowTime() {
         const d = new Date();

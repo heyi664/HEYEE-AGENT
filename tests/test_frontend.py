@@ -54,3 +54,27 @@ def test_assistant_messages_use_sanitized_markdown_rendering() -> None:
     assert "window.DOMPurify.sanitize" in page.text
     assert "fallback.innerHTML.replace(/\\n/g" in page.text
     assert "m.role === 'user'" in page.text
+
+
+def test_chat_page_displays_rag_intent_for_assistant_responses() -> None:
+    client = TestClient(create_app())
+
+    page = client.get("/ui/chat.html")
+
+    assert page.status_code == 200
+    assert "ragIntent: data && data.ragIntent" in page.text
+    assert 'v-if="m.ragIntent"' in page.text
+    assert "m.ragIntent.rewrittenQuestion" in page.text
+    assert "m.ragIntent.subQuestions" in page.text
+    assert "ragIntent.kbIntents" in page.text
+    assert "ragIntent.mcpIntents" in page.text
+
+
+def test_chat_page_allows_time_for_multi_stage_rag_processing() -> None:
+    client = TestClient(create_app())
+
+    page = client.get("/ui/chat.html")
+
+    assert page.status_code == 200
+    assert "axios.defaults.timeout = 180000" in page.text
+    assert "{ timeout: 180000 }" in page.text

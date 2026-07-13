@@ -9,6 +9,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from agent_service.core.config import get_settings
+from agent_service.core.observability import bind_conversation, record_stage
 from agent_service.memory.conversation_memory_service import ConversationMemoryService
 from agent_service.memory.models import MemoryContext, MemoryMessage
 from agent_service.rag.schemas import RetrievedSource
@@ -38,61 +39,136 @@ class ChatService:
         conversation_id = request.conversationId or f"conv_{uuid4().hex[:12]}"
         user_id = str(request.userId or 0)
 
-        memory_service = self._resolve_memory_service(
-            settings.database_url,
-            settings.agent_mock_mode,
-        )
-        if settings.memory_enabled and memory_service is not None:
-            memory_context = memory_service.load_and_append(
-                conversation_id,
-                user_id,
-                request.message,
+        with bind_conversation(conversation_id):
+            memory_started_at = time.perf_counter()
+            memory_service = self._resolve_memory_service(
+                settings.database_url,
+                settings.agent_mock_mode,
             )
-        else:
-            memory_context = self._context_from_request_history(request)
-
-        rag_intent = None
-        intent_result = None
-        if settings.rag_intent_enabled:
-            intent_result = await self._run_intent_recognition(
-                request.message,
-                memory_context.messages,
+            if settings.memory_enabled and memory_service is not None:
+                try:
+                    memory_context = memory_service.load_and_append(
+                        conversation_id,
+                        user_id,
+                        request.message,
+                    )
+                    memory_mode = "persistent"
+                except Exception:
+                    record_stage(
+                        "memory_context",
+                        elapsed_ms=_elapsed_ms(memory_started_at),
+                        messageCount=0,
+                        mode="persistent",
+                        status="failed",
+                    )
+                    raise
+            else:
+                memory_context = self._context_from_request_history(request)
+                memory_mode = "request_history"
+            record_stage(
+                "memory_context",
+                elapsed_ms=_elapsed_ms(memory_started_at),
+                messageCount=len(memory_context.messages),
+                mode=memory_mode,
+                status="success",
             )
-            rag_intent = self._to_rag_intent_response(intent_result)
 
-        retrieved_sources = await self._retrieve_knowledge(intent_result)
+            rag_intent = None
+            intent_result = None
+            intent_started_at = time.perf_counter()
+            if settings.rag_intent_enabled:
+                intent_result = await self._run_intent_recognition(
+                    request.message,
+                    memory_context.messages,
+                )
+                rag_intent = self._to_rag_intent_response(intent_result)
+            record_stage(
+                "intent_recognition",
+                elapsed_ms=_elapsed_ms(intent_started_at),
+                enabled=settings.rag_intent_enabled,
+                kbIntentCount=len(getattr(intent_result, "kb_intents", []) or []),
+                status=("success" if intent_result is not None else "fallback"),
+                subQuestionCount=len(getattr(intent_result, "sub_questions", []) or []),
+            )
 
-        messages = build_messages(
-            memory_context,
-            request.message,
-            retrieved_sources=retrieved_sources,
-            retrieval_attempted=self._has_kb_intents(intent_result),
-        )
-        result = await self._llm_service.complete(messages, use_tools=False)
+            retrieval_started_at = time.perf_counter()
+            retrieved_sources = await self._retrieve_knowledge(intent_result)
+            record_stage(
+                "knowledge_retrieval",
+                elapsed_ms=_elapsed_ms(retrieval_started_at),
+                sourceCount=len(retrieved_sources),
+                attempted=self._has_kb_intents(intent_result),
+            )
 
-        if settings.memory_enabled and memory_service is not None:
-            memory_service.append(conversation_id, user_id, "assistant", result.reply)
-            compression_result = memory_service.compress_if_needed(conversation_id, user_id)
-            if inspect.isawaitable(compression_result):
-                if settings.memory_async_compress:
-                    self._run_background_compression(compression_result)
+            messages = build_messages(
+                memory_context,
+                request.message,
+                retrieved_sources=retrieved_sources,
+                retrieval_attempted=self._has_kb_intents(intent_result),
+            )
+            answer_started_at = time.perf_counter()
+            try:
+                result = await self._llm_service.complete(messages, use_tools=False)
+            except Exception:
+                record_stage(
+                    "answer_generation",
+                    elapsed_ms=_elapsed_ms(answer_started_at),
+                    promptMessageCount=len(messages),
+                    replyChars=0,
+                    sourceCount=len(retrieved_sources),
+                    status="failed",
+                    toolCallCount=0,
+                )
+                raise
+            record_stage(
+                "answer_generation",
+                elapsed_ms=_elapsed_ms(answer_started_at),
+                promptMessageCount=len(messages),
+                replyChars=len(result.reply),
+                sourceCount=len(retrieved_sources),
+                status="success",
+                toolCallCount=len(result.tool_calls),
+            )
+
+            if settings.memory_enabled and memory_service is not None:
+                persist_started_at = time.perf_counter()
+                memory_service.append(conversation_id, user_id, "assistant", result.reply)
+                compression_result = memory_service.compress_if_needed(conversation_id, user_id)
+                if inspect.isawaitable(compression_result):
+                    if settings.memory_async_compress:
+                        self._run_background_compression(compression_result)
+                        compression_mode = "async"
+                    else:
+                        await compression_result
+                        compression_mode = "sync"
                 else:
-                    await compression_result
+                    compression_mode = "not_needed"
+                record_stage(
+                    "memory_persist",
+                    elapsed_ms=_elapsed_ms(persist_started_at),
+                    compressionMode=compression_mode,
+                )
 
-        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-        logger.info(
-            "chat completed conversationId=%s userId=%s elapsedMs=%s",
-            conversation_id,
-            request.userId,
-            elapsed_ms,
-        )
-        return ChatResponse(
-            conversationId=conversation_id,
-            reply=result.reply,
-            sources=[self._to_chat_source(source) for source in retrieved_sources],
-            toolCalls=result.tool_calls,
-            ragIntent=rag_intent,
-        )
+            elapsed_ms = _elapsed_ms(started_at)
+            record_stage(
+                "chat_total",
+                elapsed_ms=elapsed_ms,
+                sourceCount=len(retrieved_sources),
+                toolCallCount=len(result.tool_calls),
+            )
+            logger.info(
+                "chat completed conversationId=%s userId=%s elapsedMs=%s",
+                conversation_id,
+                request.userId,
+                elapsed_ms,
+            )
+            return ChatResponse(
+                conversationId=conversation_id,
+                reply=result.reply,
+                sources=[self._to_chat_source(source) for source in retrieved_sources],
+                toolCalls=result.tool_calls,
+                ragIntent=rag_intent,
+            )
 
     async def _run_intent_recognition(
         self,
@@ -222,3 +298,7 @@ class ChatService:
 
 def get_chat_service() -> ChatService:
     return ChatService(get_llm_service())
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int((time.perf_counter() - started_at) * 1000)

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 
+from agent_service.core.observability import record_stage
 from agent_service.db.session import get_engine
 from agent_service.rag.retriever import Retriever
 from agent_service.rag.schemas import RetrievedSource
@@ -166,15 +168,11 @@ class PgvectorRetriever(Retriever):
         if knowledge_base is None:
             return []
 
-        query_vector = await self._embedding_service.embed(
+        return await self._search_knowledge_base(
             cleaned_query,
-            model_id=knowledge_base.embedding_model,
-        )
-        return await asyncio.to_thread(
-            self._repository.search,
-            knowledge_base=knowledge_base,
-            query_vector=query_vector,
-            top_k=top_k,
+            knowledge_base,
+            top_k,
+            stage="pgvector_directed_search",
         )
 
     async def search_global(self, query: str, top_k: int = 5) -> list[RetrievedSource]:
@@ -183,7 +181,12 @@ class PgvectorRetriever(Retriever):
             return []
         knowledge_bases = await asyncio.to_thread(self._repository.list_knowledge_bases)
         tasks = [
-            self._search_knowledge_base(cleaned_query, item, top_k)
+            self._search_knowledge_base(
+                cleaned_query,
+                item,
+                top_k,
+                stage="pgvector_global_search",
+            )
             for item in knowledge_bases
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -200,18 +203,45 @@ class PgvectorRetriever(Retriever):
         query: str,
         knowledge_base: KnowledgeBaseEmbedding,
         top_k: int,
+        *,
+        stage: str,
     ) -> list[RetrievedSource]:
-        query_vector = await self._embedding_service.embed(
-            query,
-            model_id=knowledge_base.embedding_model,
+        started_at = time.perf_counter()
+        try:
+            query_vector = await self._embedding_service.embed(
+                query,
+                model_id=knowledge_base.embedding_model,
+            )
+            sources = await asyncio.to_thread(
+                self._repository.search,
+                knowledge_base=knowledge_base,
+                query_vector=query_vector,
+                top_k=top_k,
+            )
+        except Exception:
+            record_stage(
+                stage,
+                elapsed_ms=_elapsed_ms(started_at),
+                collectionName=knowledge_base.collection_name,
+                embeddingModel=knowledge_base.embedding_model,
+                sourceCount=0,
+                status="failed",
+            )
+            raise
+        record_stage(
+            stage,
+            elapsed_ms=_elapsed_ms(started_at),
+            collectionName=knowledge_base.collection_name,
+            embeddingModel=knowledge_base.embedding_model,
+            sourceCount=len(sources),
+            status="success",
         )
-        return await asyncio.to_thread(
-            self._repository.search,
-            knowledge_base=knowledge_base,
-            query_vector=query_vector,
-            top_k=top_k,
-        )
+        return sources
 
 
 def _pgvector_literal(vector: list[float]) -> str:
     return "[" + ",".join(str(float(value)) for value in vector) + "]"
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int((time.perf_counter() - started_at) * 1000)

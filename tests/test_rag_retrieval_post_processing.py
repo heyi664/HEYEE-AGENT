@@ -101,7 +101,7 @@ async def test_rerank_post_processor_maps_scores_and_applies_global_top_k() -> N
 
 
 @pytest.mark.asyncio
-async def test_multi_channel_retriever_keeps_healthy_results_when_one_channel_fails() -> None:
+async def test_multi_channel_retriever_keeps_healthy_results_when_one_channel_fails(caplog) -> None:
     retriever = MultiChannelRetriever(
         channels=[
             StaticChannel("intent_directed", [source("chunk-1", "policy")]),
@@ -110,7 +110,13 @@ async def test_multi_channel_retriever_keeps_healthy_results_when_one_channel_fa
         post_processors=[DeduplicationPostProcessor()],
     )
 
-    result = await retriever.retrieve(RetrievalContext(question="return policy", final_top_k=5))
+    with caplog.at_level("INFO", logger="agent_service.metrics"):
+        result = await retriever.retrieve(
+            RetrievalContext(question="return policy", final_top_k=5)
+        )
 
     assert [item.id for item in result.sources] == ["chunk-1"]
     assert [item.channel for item in result.channel_results] == ["intent_directed"]
+    assert "stage=retrieval_channel" in caplog.text
+    assert "stage=retrieval_aggregation" in caplog.text
+    assert "stage=retrieval_post_processor" in caplog.text

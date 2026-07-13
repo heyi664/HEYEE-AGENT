@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, cast
 
 from agent_service.core.config import get_settings
+from agent_service.core.observability import record_stage
 from agent_service.memory.models import MemoryMessage
 from agent_service.rag.llm_response_cleaner import parse_json_object
 from agent_service.rag.query_splitter import split_query
@@ -46,8 +48,16 @@ class QueryRewriteService:
     ) -> RewriteResult:
         fallback = self._fallback_result(question)
         if not self._enabled or self._llm_service is None:
+            record_stage(
+                "query_rewrite_llm",
+                elapsed_ms=0,
+                mode="fallback",
+                status="skipped",
+                subQuestionCount=len(fallback.sub_questions),
+            )
             return fallback
 
+        started_at = time.perf_counter()
         try:
             result = await self._llm_service.complete(
                 self._build_messages(question, history or []),
@@ -60,13 +70,28 @@ class QueryRewriteService:
                 or fallback.rewritten_question
             ).strip()
             sub_questions = self._sub_questions_from_response(parsed, rewritten_question)
-            return RewriteResult(
+            rewritten = RewriteResult(
                 original_question=question,
                 rewritten_question=rewritten_question,
                 sub_questions=sub_questions[: self._max_sub_questions],
             )
+            record_stage(
+                "query_rewrite_llm",
+                elapsed_ms=_elapsed_ms(started_at),
+                mode="llm",
+                status="success",
+                subQuestionCount=len(rewritten.sub_questions),
+            )
+            return rewritten
         except Exception:
             logger.exception("rag query rewrite failed; fallback to rule split")
+            record_stage(
+                "query_rewrite_llm",
+                elapsed_ms=_elapsed_ms(started_at),
+                mode="fallback",
+                status="failed",
+                subQuestionCount=len(fallback.sub_questions),
+            )
             return fallback
 
     def _fallback_result(self, question: str) -> RewriteResult:
@@ -188,3 +213,7 @@ class QueryRewriteService:
 
 def get_query_rewrite_service() -> QueryRewriteService:
     return QueryRewriteService(llm_service=get_llm_service())
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int((time.perf_counter() - started_at) * 1000)

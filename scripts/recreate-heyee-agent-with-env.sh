@@ -12,6 +12,7 @@ RUNTIME_ENV="${RUNTIME_ENV:-$APP_DIR/heyee-agent.runtime.env}"
 API_CONTAINER="${API_CONTAINER:-heyee-agent-api}"
 CONSUMER_CONTAINER="${CONSUMER_CONTAINER:-heyee-agent-consumer}"
 IMAGE_NAME="${IMAGE_NAME:-heyee-agent:latest}"
+HOST_LOG_DIR="${HOST_LOG_DIR:-$APP_DIR/logs}"
 
 if [[ ! -f "$SOURCE_ENV" ]]; then
   echo "[ERROR] Env file not found: $SOURCE_ENV" >&2
@@ -107,12 +108,15 @@ PY
 
 docker image inspect "$IMAGE_NAME" >/dev/null
 docker rm -f "$API_CONTAINER" "$CONSUMER_CONTAINER" >/dev/null 2>&1 || true
+mkdir -p "$HOST_LOG_DIR"
 
 docker run -d \
   --restart unless-stopped \
   --name "$API_CONTAINER" \
   --network host \
   --env-file "$RUNTIME_ENV" \
+  --env LOG_DIR=/app/logs \
+  --volume "$HOST_LOG_DIR:/app/logs" \
   "$IMAGE_NAME" \
   python -m uvicorn agent_service.main:app --host 0.0.0.0 --port 8000
 
@@ -121,6 +125,8 @@ docker run -d \
   --name "$CONSUMER_CONTAINER" \
   --network host \
   --env-file "$RUNTIME_ENV" \
+  --env LOG_DIR=/app/logs \
+  --volume "$HOST_LOG_DIR:/app/logs" \
   "$IMAGE_NAME" \
   python -m agent_service.consumers.run_knowledge_chunk_consumer
 

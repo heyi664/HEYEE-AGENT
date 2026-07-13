@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from agent_service.core.observability import record_stage
 from agent_service.memory.models import MemoryMessage
 from agent_service.rag.ambiguity_checker import AmbiguityLLMChecker
 from agent_service.rag.intent_classifier import IntentClassifier
@@ -101,14 +103,34 @@ class IntentRecognitionPipeline:
         question: str,
         history: list[MemoryMessage] | None = None,
     ) -> IntentRecognitionResult:
+        started_at = time.perf_counter()
+        rewrite_started_at = time.perf_counter()
         rewrite_result = await self._rewrite_service.rewrite(question, history)
+        record_stage(
+            "intent_rewrite",
+            elapsed_ms=_elapsed_ms(rewrite_started_at),
+            subQuestionCount=len(rewrite_result.sub_questions),
+        )
+        resolve_started_at = time.perf_counter()
         sub_intents = await self._intent_resolver.resolve(rewrite_result)
+        record_stage(
+            "intent_resolution",
+            elapsed_ms=_elapsed_ms(resolve_started_at),
+            subIntentCount=sum(len(item.node_scores) for item in sub_intents),
+            subQuestionCount=len(sub_intents),
+        )
+        guidance_started_at = time.perf_counter()
         guidance = await self._guidance_service.detect_ambiguity(
             rewrite_result.rewritten_question,
             sub_intents,
         )
+        record_stage(
+            "intent_guidance",
+            elapsed_ms=_elapsed_ms(guidance_started_at),
+            action=guidance.action.name,
+        )
         group = self._intent_resolver.merge_intent_group(sub_intents)
-        return IntentRecognitionResult(
+        result = IntentRecognitionResult(
             rewrite_result=rewrite_result,
             sub_intents=sub_intents,
             guidance=guidance,
@@ -116,6 +138,14 @@ class IntentRecognitionPipeline:
             mcp_intents=group.mcp_intents,
             is_system_only=self._intent_resolver.is_system_only(sub_intents),
         )
+        record_stage(
+            "intent_pipeline",
+            elapsed_ms=_elapsed_ms(started_at),
+            kbIntentCount=len(result.kb_intents),
+            mcpIntentCount=len(result.mcp_intents),
+            systemOnly=result.is_system_only,
+        )
+        return result
 
 
 class RepositoryIntentTreeSource:
@@ -166,3 +196,7 @@ def _score_to_dict(score: NodeScore) -> dict[str, Any]:
         "mcpToolId": node.mcp_tool_id,
         "topK": node.top_k,
     }
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int((time.perf_counter() - started_at) * 1000)

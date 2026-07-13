@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import time
 from typing import Protocol
 
+from agent_service.core.observability import record_stage
 from agent_service.rag.intent_models import IntentKind, IntentNode, IntentTreeData, NodeScore
 from agent_service.rag.llm_response_cleaner import parse_json_array
 from agent_service.rag.prompt_template_loader import PromptTemplateLoader
@@ -32,15 +34,33 @@ class IntentClassifier:
             INTENT_CLASSIFIER_PROMPT,
             {"intent_list": _serialize_leaf_nodes(tree.leaf_nodes)},
         )
-        result = await self._llm_service.complete(
-            [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": question},
-            ],
-            use_tools=False,
-        )
+        started_at = time.perf_counter()
+        try:
+            result = await self._llm_service.complete(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": question},
+                ],
+                use_tools=False,
+            )
+        except Exception:
+            record_stage(
+                "intent_classification_llm",
+                elapsed_ms=_elapsed_ms(started_at),
+                candidateNodeCount=len(tree.leaf_nodes),
+                intentCount=0,
+                status="failed",
+            )
+            raise
         scores = _parse_scores(result.reply, tree)
         scores.sort(key=lambda item: item.score, reverse=True)
+        record_stage(
+            "intent_classification_llm",
+            elapsed_ms=_elapsed_ms(started_at),
+            candidateNodeCount=len(tree.leaf_nodes),
+            intentCount=len(scores),
+            status="success",
+        )
         return scores
 
 
@@ -83,3 +103,7 @@ def _parse_scores(reply: str, tree: IntentTreeData) -> list[NodeScore]:
         reason = item.get("reason")
         scores.append(NodeScore(node=node, score=value, reason=str(reason) if reason else None))
     return scores
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int((time.perf_counter() - started_at) * 1000)

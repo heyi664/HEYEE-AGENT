@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+
+from agent_service.core.observability import record_stage
 from agent_service.rag.intent_models import NodeScore
 from agent_service.rag.llm_response_cleaner import parse_json_object
 from agent_service.rag.prompt_template_loader import PromptTemplateLoader
@@ -19,6 +22,7 @@ class AmbiguityLLMChecker:
         self._prompt_loader = prompt_loader or PromptTemplateLoader()
 
     async def check_ambiguity(self, question: str, ranked: list[NodeScore]) -> bool:
+        started_at = time.perf_counter()
         try:
             prompt = self._prompt_loader.render(
                 GUIDANCE_AMBIGUITY_PROMPT,
@@ -32,8 +36,23 @@ class AmbiguityLLMChecker:
                 use_tools=False,
             )
             parsed = parse_json_object(result.reply)
-            return bool(parsed.get("ambiguous"))
+            ambiguous = bool(parsed.get("ambiguous"))
+            record_stage(
+                "ambiguity_llm_check",
+                elapsed_ms=_elapsed_ms(started_at),
+                candidateCount=len(ranked),
+                ambiguous=ambiguous,
+                status="success",
+            )
+            return ambiguous
         except Exception:
+            record_stage(
+                "ambiguity_llm_check",
+                elapsed_ms=_elapsed_ms(started_at),
+                candidateCount=len(ranked),
+                ambiguous=True,
+                status="failed",
+            )
             return True
 
 
@@ -49,3 +68,7 @@ def _build_candidates_text(ranked: list[NodeScore]) -> str:
             f"  score={score.score}"
         )
     return "\n".join(lines)
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int((time.perf_counter() - started_at) * 1000)

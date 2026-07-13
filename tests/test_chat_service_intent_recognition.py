@@ -31,6 +31,12 @@ class FakeLLMService:
         return LLMResult(reply="assistant reply")
 
 
+class FailingLLMService:
+    async def complete(self, messages: list[dict[str, str]], use_tools: bool = True) -> LLMResult:
+        del messages, use_tools
+        raise RuntimeError("model timeout")
+
+
 class FakeIntentPipeline:
     async def recognize(self, question: str, history=None) -> IntentRecognitionResult:
         return IntentRecognitionResult(
@@ -151,3 +157,50 @@ async def test_chat_service_uses_kb_intents_to_ground_prompt_and_sources(monkeyp
     assert response.sources[0].id == "chunk-1"
     assert response.sources[0].collectionName == "test111"
     assert response.sources[0].channel == "intent_directed"
+
+
+@pytest.mark.asyncio
+async def test_chat_service_records_stage_metrics(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("RAG_INTENT_ENABLED", "true")
+    service = ChatService(
+        llm_service=FakeLLMService(),
+        memory_service=None,
+        intent_recognition_pipeline=FakeIntentPipeline(),
+    )
+
+    with caplog.at_level("INFO", logger="agent_service.metrics"):
+        await service.chat(
+            ChatRequest(
+                userId=7,
+                conversationId="conv_metrics",
+                message="current question",
+                history=[],
+            )
+        )
+
+    assert "stage=memory_context" in caplog.text
+    assert "stage=intent_recognition" in caplog.text
+    assert "stage=answer_generation" in caplog.text
+    assert "stage=chat_total" in caplog.text
+    assert "conversationId=conv_metrics" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_chat_service_records_failed_answer_generation_metric(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("RAG_INTENT_ENABLED", "false")
+    service = ChatService(llm_service=FailingLLMService(), memory_service=None)
+
+    with caplog.at_level("INFO", logger="agent_service.metrics"):
+        with pytest.raises(RuntimeError, match="model timeout"):
+            await service.chat(
+                ChatRequest(
+                    userId=7,
+                    conversationId="conv_fail",
+                    message="current question",
+                    history=[],
+                )
+            )
+
+    assert "stage=answer_generation" in caplog.text
+    assert "conversationId=conv_fail" in caplog.text
+    assert "status=failed" in caplog.text

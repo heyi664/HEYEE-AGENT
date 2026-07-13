@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     service_name: str = "heyee-agent"
     service_version: str = "0.1.0"
     log_level: str = "INFO"
+    log_dir: str = "./logs"
+    log_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
+    log_backup_count: int = Field(default=7, ge=1, le=100)
 
     agent_host: str = "127.0.0.1"
     agent_port: int = 8000

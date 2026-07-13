@@ -27,11 +27,13 @@ class ChatService:
         memory_service: ConversationMemoryService | object | None = None,
         intent_recognition_pipeline: object | None = None,
         retrieval_pipeline: object | None = None,
+        mcp_execution_service: object | None = None,
     ) -> None:
         self._llm_service = llm_service
         self._memory_service: Any = memory_service
         self._intent_recognition_pipeline: Any = intent_recognition_pipeline
         self._retrieval_pipeline: Any = retrieval_pipeline
+        self._mcp_execution_service: Any = mcp_execution_service
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         settings = get_settings()
@@ -92,7 +94,10 @@ class ChatService:
             )
 
             retrieval_started_at = time.perf_counter()
-            retrieved_sources = await self._retrieve_knowledge(intent_result)
+            retrieved_sources, mcp_result = await asyncio.gather(
+                self._retrieve_knowledge(intent_result),
+                self._execute_mcp_tools(intent_result),
+            )
             record_stage(
                 "knowledge_retrieval",
                 elapsed_ms=_elapsed_ms(retrieval_started_at),
@@ -105,6 +110,8 @@ class ChatService:
                 request.message,
                 retrieved_sources=retrieved_sources,
                 retrieval_attempted=self._has_kb_intents(intent_result),
+                mcp_context=mcp_result.context,
+                mcp_attempted=self._has_mcp_intents(intent_result),
             )
             answer_started_at = time.perf_counter()
             try:
@@ -117,7 +124,7 @@ class ChatService:
                     replyChars=0,
                     sourceCount=len(retrieved_sources),
                     status="failed",
-                    toolCallCount=0,
+                    toolCallCount=len(mcp_result.tool_calls),
                 )
                 raise
             record_stage(
@@ -127,7 +134,7 @@ class ChatService:
                 replyChars=len(result.reply),
                 sourceCount=len(retrieved_sources),
                 status="success",
-                toolCallCount=len(result.tool_calls),
+                toolCallCount=len(mcp_result.tool_calls) + len(result.tool_calls),
             )
 
             if settings.memory_enabled and memory_service is not None:
@@ -154,7 +161,7 @@ class ChatService:
                 "chat_total",
                 elapsed_ms=elapsed_ms,
                 sourceCount=len(retrieved_sources),
-                toolCallCount=len(result.tool_calls),
+                toolCallCount=len(mcp_result.tool_calls) + len(result.tool_calls),
             )
             logger.info(
                 "chat completed conversationId=%s userId=%s elapsedMs=%s",
@@ -166,7 +173,7 @@ class ChatService:
                 conversationId=conversation_id,
                 reply=result.reply,
                 sources=[self._to_chat_source(source) for source in retrieved_sources],
-                toolCalls=result.tool_calls,
+                toolCalls=mcp_result.tool_calls + result.tool_calls,
                 ragIntent=rag_intent,
             )
 
@@ -226,6 +233,43 @@ class ChatService:
 
     def _has_kb_intents(self, intent_result: Any | None) -> bool:
         return bool(getattr(intent_result, "kb_intents", None))
+
+    def _has_mcp_intents(self, intent_result: Any | None) -> bool:
+        return bool(getattr(intent_result, "mcp_intents", None))
+
+    async def _execute_mcp_tools(self, intent_result: Any | None) -> Any:
+        from agent_service.mcp.execution import McpExecutionResult
+
+        if not self._has_mcp_intents(intent_result):
+            return McpExecutionResult.empty()
+        sub_intents = list(getattr(intent_result, "sub_intents", []) or [])
+        if not sub_intents:
+            return McpExecutionResult.empty()
+        service = self._resolve_mcp_execution_service()
+        if service is None:
+            return McpExecutionResult.empty()
+        try:
+            return await service.execute(sub_intents)
+        except Exception:
+            logger.exception("MCP execution pipeline failed")
+            return McpExecutionResult.empty()
+
+    def _resolve_mcp_execution_service(self) -> Any | None:
+        if self._mcp_execution_service is not None:
+            return self._mcp_execution_service
+        try:
+            from agent_service.mcp.execution import McpExecutionService
+            from agent_service.mcp.parameter_extractor import McpParameterExtractor
+
+            settings = get_settings()
+            self._mcp_execution_service = McpExecutionService(
+                parameter_extractor=McpParameterExtractor(self._llm_service),
+                max_context_chars=settings.mcp_context_max_chars,
+            )
+        except Exception:
+            logger.exception("MCP execution pipeline initialization failed")
+            return None
+        return self._mcp_execution_service
 
     def _resolve_retrieval_pipeline(self) -> Any | None:
         if self._retrieval_pipeline is not None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from agent_service.mcp.execution import McpExecutionResult, McpToolExecution
 from agent_service.rag.intent_models import (
     GuidanceDecision,
     IntentKind,
@@ -106,6 +107,47 @@ class FakeKbIntentPipeline:
         )
 
 
+class FakeMcpIntentPipeline:
+    async def recognize(self, question: str, history=None) -> IntentRecognitionResult:
+        node_score = NodeScore(
+            node=IntentNode(
+                id="order-status",
+                name="order status",
+                level=IntentLevel.TOPIC,
+                kind=IntentKind.MCP,
+                mcp_tool_id="order_query",
+            ),
+            score=0.95,
+        )
+        return IntentRecognitionResult(
+            rewrite_result=RewriteResult(
+                original_question=question,
+                rewritten_question="order 2024112801 status",
+                sub_questions=["order 2024112801 status"],
+            ),
+            sub_intents=[SubQuestionIntent("order 2024112801 status", [node_score])],
+            guidance=GuidanceDecision.none(),
+            kb_intents=[],
+            mcp_intents=[node_score],
+            is_system_only=False,
+        )
+
+
+class FakeMcpExecutionService:
+    async def execute(self, sub_intents) -> McpExecutionResult:
+        assert sub_intents[0].sub_question == "order 2024112801 status"
+        return McpExecutionResult(
+            [
+                McpToolExecution(
+                    tool_id="order_query",
+                    sub_question="order 2024112801 status",
+                    status="success",
+                    content='{"status":"REFUND_PROCESSING"}',
+                )
+            ]
+        )
+
+
 @pytest.mark.asyncio
 async def test_chat_service_outputs_rag_intent_when_enabled(monkeypatch) -> None:
     monkeypatch.setenv("RAG_INTENT_ENABLED", "true")
@@ -157,6 +199,33 @@ async def test_chat_service_uses_kb_intents_to_ground_prompt_and_sources(monkeyp
     assert response.sources[0].id == "chunk-1"
     assert response.sources[0].collectionName == "test111"
     assert response.sources[0].channel == "intent_directed"
+
+
+@pytest.mark.asyncio
+async def test_chat_service_adds_mcp_context_and_tool_calls_when_mcp_intent_is_hit(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RAG_INTENT_ENABLED", "true")
+    llm_service = FakeLLMService()
+    service = ChatService(
+        llm_service=llm_service,
+        memory_service=None,
+        intent_recognition_pipeline=FakeMcpIntentPipeline(),
+        mcp_execution_service=FakeMcpExecutionService(),
+    )
+
+    response = await service.chat(
+        ChatRequest(
+            userId=7,
+            conversationId="conv_mcp",
+            message="订单退款到哪一步了？",
+            history=[],
+        )
+    )
+
+    assert "Real-time MCP context follows" in llm_service.messages[0]["content"]
+    assert "REFUND_PROCESSING" in llm_service.messages[0]["content"]
+    assert response.toolCalls == ["order_query"]
 
 
 @pytest.mark.asyncio

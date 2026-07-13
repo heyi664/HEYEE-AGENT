@@ -13,7 +13,7 @@ class McpToolDefinition:
 
 class McpClientProtocol(Protocol):
     async def list_tools(self) -> list[McpToolDefinition]:
-        """Return tools exposed by the Java MCP server."""
+        """Return tools exposed by the remote MCP server."""
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
-        """Call one Java MCP tool and return a text observation."""
+        """Call one remote MCP tool and return a text observation."""

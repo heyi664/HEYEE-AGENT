@@ -32,33 +32,38 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     mcp_client: StreamableHttpMcpClient | None = None
     register_builtin_tools(tool_registry)
+    app.state.mcp_client = None
+    app.state.mcp_tools = []
 
     if settings.mcp_enabled:
-        mcp_client = StreamableHttpMcpClient(
-            server_url=settings.mcp_server_url,
-            token=settings.mcp_server_token,
-            timeout_seconds=settings.mcp_timeout_seconds,
-        )
-        try:
-            server_info = await mcp_client.initialize()
-            registered = await register_mcp_tools(
-                mcp_client,
-                tool_registry,
-                name_prefix=settings.mcp_tool_prefix,
+        if not settings.mcp_server_url:
+            logger.warning("MCP is enabled but no MCP_SERVER_URL has been configured")
+        else:
+            mcp_client = StreamableHttpMcpClient(
+                server_url=settings.mcp_server_url,
+                token=settings.mcp_server_token,
+                timeout_seconds=settings.mcp_timeout_seconds,
             )
-            app.state.mcp_client = mcp_client
-            app.state.mcp_tools = registered
-            logger.info(
-                "Java MCP connected server=%s tools=%s",
-                server_info.get("serverInfo", {}).get("name", "unknown"),
-                registered,
-            )
-        except Exception:
-            await mcp_client.close()
-            mcp_client = None
-            logger.exception("Java MCP initialization failed url=%s", settings.mcp_server_url)
-            if settings.mcp_fail_fast:
-                raise
+            try:
+                server_info = await mcp_client.initialize()
+                registered = await register_mcp_tools(
+                    mcp_client,
+                    tool_registry,
+                    name_prefix=settings.mcp_tool_prefix,
+                )
+                app.state.mcp_client = mcp_client
+                app.state.mcp_tools = registered
+                logger.info(
+                    "MCP connected server=%s tools=%s",
+                    server_info.get("serverInfo", {}).get("name", "unknown"),
+                    registered,
+                )
+            except Exception:
+                await mcp_client.close()
+                mcp_client = None
+                logger.exception("MCP initialization failed url=%s", settings.mcp_server_url)
+                if settings.mcp_fail_fast:
+                    raise
 
     try:
         yield

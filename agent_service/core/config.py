@@ -45,11 +45,14 @@ class Settings(BaseSettings):
     java_service_url: str = "http://127.0.0.1:8081"
 
     mcp_enabled: bool = False
-    mcp_server_url: str = "http://127.0.0.1:8081/mcp"
+    # The business-project MCP Server is intentionally not configured yet.
+    # Set MCP_ENABLED=true and MCP_SERVER_URL only after the Server is available.
+    mcp_server_url: str | None = None
     mcp_server_token: str | None = None
     mcp_timeout_seconds: float = Field(default=10.0, gt=0)
     mcp_tool_prefix: str = ""
     mcp_fail_fast: bool = False
+    mcp_context_max_chars: int = Field(default=6000, ge=500, le=50000)
 
     database_url: str | None = None
     memory_enabled: bool = True

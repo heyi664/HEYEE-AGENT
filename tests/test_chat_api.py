@@ -58,3 +58,17 @@ def test_chat_rejects_too_long_conversation_id() -> None:
     assert response.status_code == 400
     assert response.json()["detail"] == "Invalid chat request"
 
+
+def test_chat_stream_returns_sse_events() -> None:
+    client = TestClient(create_app())
+
+    with client.stream("POST", "/v1/agent/chat/stream", json={"message": "hello"}) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: meta" in body
+    assert '"type":"response"' in body
+    assert "event: finish" in body
+    assert "event: done" in body
+

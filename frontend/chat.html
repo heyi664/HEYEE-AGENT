@@ -87,6 +87,9 @@
               v-else
               v-html="renderMarkdown(m.content)"
             ></div>
+            <div class="thinking-text" v-if="m.role === 'assistant' && m.thinking">
+              <span>思考过程：</span>{{m.thinking}}
+            </div>
             <div class="intent-trace" v-if="m.ragIntent">
               <div class="intent-trace-title"><i class="el-icon-connection"></i> 意向识别</div>
               <div class="intent-trace-row">
@@ -143,7 +146,11 @@
             v-model="inputText"
             @keydown.native="handleKeydown">
           </el-input>
-          <button class="send-btn" :disabled="!canSend" @click="sendMessage">
+          <button v-if="loading" class="send-btn" @click="cancelStream">
+            <i class="el-icon-close"></i>
+            <span>停止</span>
+          </button>
+          <button v-else class="send-btn" :disabled="!canSend" @click="sendMessage">
             <i class="el-icon-position"></i>
             <span>发送</span>
           </button>
@@ -183,6 +190,8 @@
     data: {
       inputText: "",
       loading: false,
+      activeTaskId: "",
+      streamAbortController: null,
       conversationId: sessionStorage.getItem("hyeee_ai_conversation_id") || "",
       messages: [],
       quickPrompts: [
@@ -228,6 +237,7 @@
         location.href = "/ui/chat.html";
       },
       startNewChat() {
+        this.cancelStream();
         this.messages = [];
         this.conversationId = "";
         this.inputText = "";
@@ -240,6 +250,7 @@
           cancelButtonText: "取消",
           type: "warning"
         }).then(() => {
+          this.cancelStream();
           this.messages = [];
           this.conversationId = "";
           sessionStorage.removeItem(STORAGE_KEY);
@@ -256,46 +267,115 @@
           this.sendMessage();
         }
       },
-      sendMessage() {
+      async sendMessage() {
         const content = this.inputText.trim();
         if (!content || this.loading) return;
 
         this.messages.push({ role: "user", content, time: this.nowTime() });
         this.inputText = "";
         this.loading = true;
+        const history = this.messages.slice(-10).map(m => ({ role: m.role, content: m.content }));
+        const assistantMessage = {
+          role: "assistant",
+          content: "",
+          thinking: "",
+          sources: [],
+          streaming: true,
+          time: this.nowTime()
+        };
+        this.messages.push(assistantMessage);
+        this.streamAbortController = new AbortController();
         this.persistMessages();
         this.$nextTick(this.scrollToBottom);
 
-        axios.post("/v1/agent/chat", {
-          userId: null,
-          conversationId: this.conversationId,
-          message: content,
-          history: this.messages.slice(-10).map(m => ({ role: m.role, content: m.content }))
-        }, { timeout: 180000 }).then(({data}) => {
-          const reply = data && data.reply ? data.reply : "我已经收到你的问题，但后端暂时没有返回回复内容。";
-          if (data && data.conversationId) {
+        try {
+          const response = await fetch("/v1/agent/chat/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+            body: JSON.stringify({
+              userId: null,
+              conversationId: this.conversationId,
+              message: content,
+              deepThinking: false,
+              history
+            }),
+            signal: this.streamAbortController.signal
+          });
+          if (!response.ok || !response.body) {
+            throw new Error("stream request failed: " + response.status);
+          }
+          await this.consumeStream(response.body, assistantMessage);
+        } catch (err) {
+          if (err && err.name === "AbortError") return;
+          assistantMessage.content = assistantMessage.content || "AI 流式聊天暂时不可用，请稍后重试。";
+          assistantMessage.error = true;
+        } finally {
+          assistantMessage.streaming = false;
+          if (!assistantMessage.content && !assistantMessage.thinking) {
+            assistantMessage.content = "本次回答已停止。";
+          }
+          this.activeTaskId = "";
+          this.streamAbortController = null;
+          this.loading = false;
+          this.persistMessages();
+          this.$nextTick(this.scrollToBottom);
+        }
+      },
+      async consumeStream(body, assistantMessage) {
+        const reader = body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split("\n\n");
+          buffer = events.pop();
+          events.forEach(eventText => this.handleStreamEvent(eventText, assistantMessage));
+          this.$nextTick(this.scrollToBottom);
+        }
+        buffer += decoder.decode();
+        if (buffer.trim()) this.handleStreamEvent(buffer, assistantMessage);
+      },
+      handleStreamEvent(eventText, assistantMessage) {
+        let eventName = "message";
+        const dataLines = [];
+        eventText.split("\n").forEach(line => {
+          if (line.startsWith("event:")) eventName = line.slice(6).trim();
+          if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+        });
+        if (!dataLines.length) return;
+        let data;
+        try { data = JSON.parse(dataLines.join("\n")); } catch (e) { return; }
+        if (eventName === "meta") {
+          this.activeTaskId = data.taskId || "";
+          if (data.conversationId) {
             this.conversationId = data.conversationId;
             sessionStorage.setItem("hyeee_ai_conversation_id", this.conversationId);
           }
-          this.messages.push({
-            role: "assistant",
-            content: reply,
-            ragIntent: data && data.ragIntent ? data.ragIntent : null,
-            sources: data && data.sources ? data.sources : [],
-            time: this.nowTime()
-          });
-          this.persistMessages();
-        }).catch(err => {
-          this.messages.push({
-            role: "assistant",
-            content: "AI 聊天接口暂时不可用，请确认 Python Agent 已启动并可访问 /v1/agent/chat。错误信息：" + err,
-            time: this.nowTime()
-          });
-          this.persistMessages();
-        }).finally(() => {
-          this.loading = false;
-          this.$nextTick(this.scrollToBottom);
-        });
+          assistantMessage.ragIntent = data.ragIntent || null;
+          assistantMessage.sources = data.sources || [];
+        } else if (eventName === "message") {
+          if (data.type === "think") assistantMessage.thinking += data.delta || "";
+          if (data.type === "response") assistantMessage.content += data.delta || "";
+        } else if (eventName === "finish") {
+          assistantMessage.ragIntent = data.ragIntent || assistantMessage.ragIntent;
+          assistantMessage.sources = data.sources || assistantMessage.sources;
+        } else if (eventName === "error") {
+          assistantMessage.content = assistantMessage.content || data.message || "AI 流式回答失败。";
+          assistantMessage.error = true;
+        } else if (eventName === "cancel") {
+          assistantMessage.content = assistantMessage.content || "本次回答已停止。";
+        }
+      },
+      async cancelStream() {
+        const taskId = this.activeTaskId;
+        if (taskId) {
+          try {
+            await fetch("/v1/agent/chat/stream/" + encodeURIComponent(taskId) + "/cancel", { method: "POST" });
+          } catch (e) {}
+        }
+        if (this.streamAbortController) this.streamAbortController.abort();
       },
       renderMarkdown(content) {
         const source = String(content || "");

@@ -10,6 +10,7 @@ htmlcov/
 heyee-agent.runtime.env
 *.log
 *.md
+!README.md
 !docs/mcp-server-business-project.md
 !docs/mcp-client-heyee-agent.md
 *.egg-info/

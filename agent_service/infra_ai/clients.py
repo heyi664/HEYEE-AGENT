@@ -189,6 +189,89 @@ class OllamaChatModelClient:
             assistant_message=message,
         )
 
+    async def do_stream_chat(
+        self,
+        target: ModelTarget,
+        messages: list[dict[str, Any]],
+        schemas: list[dict[str, Any]],
+        callback: StreamCallback,
+        *,
+        reasoning_enabled: bool = False,
+        temperature: float | None = None,
+        top_p: float | None = None,
+    ) -> StreamCancellationHandle:
+        settings = get_settings()
+        options: dict[str, Any] = {"temperature": 0 if temperature is None else temperature}
+        if top_p is not None:
+            options["top_p"] = top_p
+        payload: dict[str, Any] = {
+            "model": target.candidate.model,
+            "messages": messages,
+            "stream": True,
+            "options": options,
+        }
+        if schemas:
+            payload["tools"] = schemas
+        cancelled = asyncio.Event()
+        task = asyncio.create_task(
+            self._run_ollama_stream(
+                target,
+                payload,
+                callback,
+                cancelled,
+                reasoning_enabled,
+                target.candidate.timeout_seconds or settings.ai_timeout_seconds,
+            )
+        )
+        return StreamCancellationHandle(task, cancelled)
+
+    async def _run_ollama_stream(
+        self,
+        target: ModelTarget,
+        payload: dict[str, Any],
+        callback: StreamCallback,
+        cancelled: asyncio.Event,
+        reasoning_enabled: bool,
+        timeout: float,
+    ) -> None:
+        settings = get_settings()
+        completed = False
+        try:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+                async with client.stream(
+                    "POST",
+                    f"{(target.provider.url or settings.ai_base_url).rstrip('/')}/api/chat",
+                    json=payload,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if cancelled.is_set():
+                            return
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(data, dict):
+                            continue
+                        message = data.get("message")
+                        if isinstance(message, dict):
+                            thinking = _optional_text(message.get("thinking"))
+                            if reasoning_enabled and thinking:
+                                await _notify_callback(callback, "on_thinking", thinking)
+                            if content := _optional_text(message.get("content")):
+                                await _notify_callback(callback, "on_content", content)
+                        if data.get("done"):
+                            completed = True
+                            await _notify_callback(callback, "on_complete")
+                            return
+            if not completed and not cancelled.is_set():
+                raise ModelUnavailableError("Ollama stream ended before completion")
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            if not cancelled.is_set():
+                await _notify_callback(callback, "on_error", ModelUnavailableError(str(exc)))
+
 
 class AbstractOpenAIStyleChatModelClient:
     def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
@@ -370,13 +453,22 @@ class AbstractOpenAIStyleChatModelClient:
         callback: StreamCallback,
         *,
         reasoning_enabled: bool = False,
+        temperature: float | None = None,
+        top_p: float | None = None,
     ) -> StreamCancellationHandle:
         settings = get_settings()
         self._require_provider(target)
         if self.requires_api_key():
             self._require_api_key(target)
 
-        payload = self.build_request_body(target, messages, schemas, stream=True)
+        payload = self.build_request_body(
+            target,
+            messages,
+            schemas,
+            stream=True,
+            temperature=temperature,
+            top_p=top_p,
+        )
         headers = self.new_authorized_headers(target)
         headers["Accept"] = "text/event-stream"
         timeout = target.candidate.timeout_seconds or settings.ai_timeout_seconds

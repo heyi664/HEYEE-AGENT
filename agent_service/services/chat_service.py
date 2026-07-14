@@ -5,6 +5,7 @@ import inspect
 import logging
 import time
 from collections.abc import Coroutine
+from dataclasses import dataclass
 from typing import Any, cast
 from uuid import uuid4
 
@@ -24,6 +25,22 @@ from agent_service.services.prompt_service import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class ChatPreparation:
+    started_at: float
+    settings: Any
+    conversation_id: str
+    user_id: str
+    deep_thinking: bool
+    memory_service: Any | None
+    memory_enabled: bool
+    rag_intent: dict[str, Any] | None
+    retrieved_sources: list[RetrievedSource]
+    mcp_result: Any
+    messages: list[dict[str, str]]
+    prompt_plan: PromptBuildPlan
+
+
 class ChatService:
     def __init__(
         self,
@@ -40,6 +57,24 @@ class ChatService:
         self._mcp_execution_service: Any = mcp_execution_service
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
+        preparation = await self.prepare(request)
+        answer_started_at = time.perf_counter()
+        try:
+            result = await self._complete_answer(
+                preparation.messages,
+                preparation.prompt_plan,
+            )
+        except Exception:
+            self.record_answer_failure(preparation, answer_started_at)
+            raise
+        return await self.complete_preparation(
+            preparation,
+            reply=result.reply,
+            tool_calls=result.tool_calls,
+            answer_started_at=answer_started_at,
+        )
+
+    async def prepare(self, request: ChatRequest) -> ChatPreparation:
         settings = get_settings()
         started_at = time.perf_counter()
         conversation_id = request.conversationId or f"conv_{uuid4().hex[:12]}"
@@ -130,69 +165,110 @@ class ChatService:
                 ),
             )
             messages = build_messages_from_plan(memory_context, prompt_plan)
-            answer_started_at = time.perf_counter()
-            try:
-                result = await self._complete_answer(messages, prompt_plan)
-            except Exception:
-                record_stage(
-                    "answer_generation",
-                    elapsed_ms=_elapsed_ms(answer_started_at),
-                    promptMessageCount=len(messages),
-                    replyChars=0,
-                    sourceCount=len(retrieved_sources),
-                    status="failed",
-                    toolCallCount=len(mcp_result.tool_calls),
-                )
-                raise
-            record_stage(
-                "answer_generation",
-                elapsed_ms=_elapsed_ms(answer_started_at),
-                promptMessageCount=len(messages),
-                replyChars=len(result.reply),
-                sourceCount=len(retrieved_sources),
-                status="success",
-                toolCallCount=len(mcp_result.tool_calls) + len(result.tool_calls),
+            return ChatPreparation(
+                started_at=started_at,
+                settings=settings,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                deep_thinking=request.deepThinking,
+                memory_service=memory_service,
+                memory_enabled=settings.memory_enabled,
+                rag_intent=rag_intent,
+                retrieved_sources=retrieved_sources,
+                mcp_result=mcp_result,
+                messages=messages,
+                prompt_plan=prompt_plan,
             )
 
-            if settings.memory_enabled and memory_service is not None:
-                persist_started_at = time.perf_counter()
-                memory_service.append(conversation_id, user_id, "assistant", result.reply)
-                compression_result = memory_service.compress_if_needed(conversation_id, user_id)
-                if inspect.isawaitable(compression_result):
-                    if settings.memory_async_compress:
-                        self._run_background_compression(compression_result)
-                        compression_mode = "async"
-                    else:
-                        await compression_result
-                        compression_mode = "sync"
-                else:
-                    compression_mode = "not_needed"
-                record_stage(
-                    "memory_persist",
-                    elapsed_ms=_elapsed_ms(persist_started_at),
-                    compressionMode=compression_mode,
-                )
+    def record_answer_failure(
+        self,
+        preparation: ChatPreparation,
+        answer_started_at: float,
+    ) -> None:
+        record_stage(
+            "answer_generation",
+            elapsed_ms=_elapsed_ms(answer_started_at),
+            promptMessageCount=len(preparation.messages),
+            replyChars=0,
+            sourceCount=len(preparation.retrieved_sources),
+            status="failed",
+            toolCallCount=len(preparation.mcp_result.tool_calls),
+        )
 
-            elapsed_ms = _elapsed_ms(started_at)
-            record_stage(
-                "chat_total",
-                elapsed_ms=elapsed_ms,
-                sourceCount=len(retrieved_sources),
-                toolCallCount=len(mcp_result.tool_calls) + len(result.tool_calls),
-            )
-            logger.info(
-                "chat completed conversationId=%s userId=%s elapsedMs=%s",
-                conversation_id,
-                request.userId,
-                elapsed_ms,
-            )
-            return ChatResponse(
-                conversationId=conversation_id,
-                reply=result.reply,
-                sources=[self._to_chat_source(source) for source in retrieved_sources],
-                toolCalls=mcp_result.tool_calls + result.tool_calls,
-                ragIntent=rag_intent,
-            )
+    async def complete_preparation(
+        self,
+        preparation: ChatPreparation,
+        *,
+        reply: str,
+        tool_calls: list[str],
+        answer_started_at: float,
+    ) -> ChatResponse:
+        record_stage(
+            "answer_generation",
+            elapsed_ms=_elapsed_ms(answer_started_at),
+            promptMessageCount=len(preparation.messages),
+            replyChars=len(reply),
+            sourceCount=len(preparation.retrieved_sources),
+            status="success",
+            toolCallCount=len(preparation.mcp_result.tool_calls) + len(tool_calls),
+        )
+        message_id = await self._persist_assistant_reply(preparation, reply)
+        elapsed_ms = _elapsed_ms(preparation.started_at)
+        record_stage(
+            "chat_total",
+            elapsed_ms=elapsed_ms,
+            sourceCount=len(preparation.retrieved_sources),
+            toolCallCount=len(preparation.mcp_result.tool_calls) + len(tool_calls),
+        )
+        logger.info(
+            "chat completed conversationId=%s userId=%s elapsedMs=%s",
+            preparation.conversation_id,
+            preparation.user_id,
+            elapsed_ms,
+        )
+        response = ChatResponse(
+            conversationId=preparation.conversation_id,
+            messageId=message_id,
+            reply=reply,
+            sources=[self._to_chat_source(source) for source in preparation.retrieved_sources],
+            toolCalls=preparation.mcp_result.tool_calls + tool_calls,
+            ragIntent=preparation.rag_intent,
+        )
+        return response
+
+    async def _persist_assistant_reply(
+        self,
+        preparation: ChatPreparation,
+        reply: str,
+    ) -> str | None:
+        if not preparation.memory_enabled or preparation.memory_service is None:
+            return None
+        persist_started_at = time.perf_counter()
+        message_id = preparation.memory_service.append(
+            preparation.conversation_id,
+            preparation.user_id,
+            "assistant",
+            reply,
+        )
+        compression_result = preparation.memory_service.compress_if_needed(
+            preparation.conversation_id,
+            preparation.user_id,
+        )
+        if inspect.isawaitable(compression_result):
+            if preparation.settings.memory_async_compress:
+                self._run_background_compression(compression_result)
+                compression_mode = "async"
+            else:
+                await compression_result
+                compression_mode = "sync"
+        else:
+            compression_mode = "not_needed"
+        record_stage(
+            "memory_persist",
+            elapsed_ms=_elapsed_ms(persist_started_at),
+            compressionMode=compression_mode,
+        )
+        return str(message_id) if message_id else None
 
     async def _run_intent_recognition(
         self,

@@ -74,6 +74,9 @@ class ChatModelClient(Protocol):
         target: ModelTarget,
         messages: list[dict[str, Any]],
         schemas: list[dict[str, Any]],
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
     ) -> ChatTurn: ...
 
 
@@ -131,14 +134,19 @@ class OllamaChatModelClient:
         target: ModelTarget,
         messages: list[dict[str, Any]],
         schemas: list[dict[str, Any]],
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
     ) -> ChatTurn:
         settings = get_settings()
         payload: dict[str, Any] = {
             "model": target.candidate.model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": 0},
+            "options": {"temperature": 0 if temperature is None else temperature},
         }
+        if top_p is not None:
+            payload["options"]["top_p"] = top_p
         if schemas:
             payload["tools"] = schemas
 
@@ -191,21 +199,40 @@ class AbstractOpenAIStyleChatModelClient:
         target: ModelTarget,
         messages: list[dict[str, Any]],
         schemas: list[dict[str, Any]],
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
     ) -> ChatTurn:
-        return await self.do_chat(target, messages, schemas)
+        return await self.do_chat(
+            target,
+            messages,
+            schemas,
+            temperature=temperature,
+            top_p=top_p,
+        )
 
     async def do_chat(
         self,
         target: ModelTarget,
         messages: list[dict[str, Any]],
         schemas: list[dict[str, Any]],
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
     ) -> ChatTurn:
         settings = get_settings()
         self._require_provider(target)
         if self.requires_api_key():
             self._require_api_key(target)
 
-        payload = self.build_request_body(target, messages, schemas, stream=False)
+        payload = self.build_request_body(
+            target,
+            messages,
+            schemas,
+            stream=False,
+            temperature=temperature,
+            top_p=top_p,
+        )
         headers = self.new_authorized_headers(target)
         timeout = target.candidate.timeout_seconds or settings.ai_timeout_seconds
         try:
@@ -257,12 +284,17 @@ class AbstractOpenAIStyleChatModelClient:
         messages: list[dict[str, Any]],
         schemas: list[dict[str, Any]],
         stream: bool = False,
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": target.candidate.model,
             "messages": messages,
-            "temperature": 0.2,
+            "temperature": 0.2 if temperature is None else temperature,
         }
+        if top_p is not None:
+            body["top_p"] = top_p
         if stream:
             body["stream"] = True
         if schemas:

@@ -48,6 +48,9 @@ class FunctionCallService:
         messages: list[dict[str, str]],
         max_steps: int,
         use_tools: bool = True,
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
     ) -> FunctionCallResult:
         conversation: list[dict[str, Any]] = [dict(message) for message in messages]
         schemas = self._registry.function_schemas() if use_tools else []
@@ -72,7 +75,12 @@ class FunctionCallService:
         # Every turn sees the updated observations and all schemas, so the model can
         # select a different tool for the next part of a multi-step task.
         for step in range(1, max_steps + 1):
-            turn = await self._generate_turn(conversation, schemas)
+            turn = await self._generate(
+                conversation,
+                schemas,
+                temperature=temperature,
+                top_p=top_p,
+            )
             if not turn.tool_calls:
                 if turn.content and turn.content.strip():
                     return FunctionCallResult(turn.content.strip(), summaries)
@@ -95,7 +103,12 @@ class FunctionCallService:
                     call.name,
                 )
 
-        final_turn = await self._generate_turn(conversation, [])
+        final_turn = await self._generate(
+            conversation,
+            [],
+            temperature=temperature,
+            top_p=top_p,
+        )
         if not final_turn.content or not final_turn.content.strip():
             raise ModelUnavailableError("function call loop reached its limit")
         return FunctionCallResult(final_turn.content.strip(), summaries)
@@ -104,13 +117,41 @@ class FunctionCallService:
         self,
         messages: list[dict[str, Any]],
         schemas: list[dict[str, Any]],
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
     ) -> FunctionCallTurn:
         targets = self._selector.select_chat_candidates(require_tools=bool(schemas))
         return await self._routing_executor.execute_with_fallback(
             ModelCapability.CHAT,
             targets,
             self._client_registry.resolve,
-            lambda client, target: self._call_chat_client(client, target, messages, schemas),
+            lambda client, target: self._call_chat_client(
+                client,
+                target,
+                messages,
+                schemas,
+                temperature=temperature,
+                top_p=top_p,
+            ),
+        )
+
+    async def _generate(
+        self,
+        messages: list[dict[str, Any]],
+        schemas: list[dict[str, Any]],
+        *,
+        temperature: float | None,
+        top_p: float | None,
+    ) -> FunctionCallTurn:
+        # Keep test and third-party subclasses that override _generate_turn compatible.
+        if temperature is None and top_p is None:
+            return await self._generate_turn(messages, schemas)
+        return await self._generate_turn(
+            messages,
+            schemas,
+            temperature=temperature,
+            top_p=top_p,
         )
 
     async def _call_chat_client(
@@ -119,8 +160,17 @@ class FunctionCallService:
         target: ModelTarget,
         messages: list[dict[str, Any]],
         schemas: list[dict[str, Any]],
+        *,
+        temperature: float | None,
+        top_p: float | None,
     ) -> FunctionCallTurn:
-        return await client.complete_turn(target, messages, schemas)
+        return await client.complete_turn(
+            target,
+            messages,
+            schemas,
+            temperature=temperature,
+            top_p=top_p,
+        )
 
     async def _execute(self, call: FunctionCallRequest) -> tuple[str, str]:
         tool = self._registry.get(call.name)

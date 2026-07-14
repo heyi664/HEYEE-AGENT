@@ -15,7 +15,9 @@ class PromptTemplateLoader:
         return self._cache[path]
 
     def render(self, path: str, slots: dict[str, str]) -> str:
-        template = self.load(path)
+        return self.render_text(self.load(path), slots)
+
+    def render_text(self, template: str, slots: dict[str, str]) -> str:
         rendered = template
         for key, value in slots.items():
             rendered = rendered.replace("{" + key + "}", value)

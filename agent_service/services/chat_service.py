@@ -15,7 +15,11 @@ from agent_service.memory.models import MemoryContext, MemoryMessage
 from agent_service.rag.schemas import RetrievedSource
 from agent_service.schemas.chat import ChatRequest, ChatResponse, ChatSource
 from agent_service.services.llm_service import LLMService, get_llm_service
-from agent_service.services.prompt_service import build_messages
+from agent_service.services.prompt_service import (
+    PromptBuildPlan,
+    build_messages_from_plan,
+    build_prompt_plan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,17 +109,30 @@ class ChatService:
                 attempted=self._has_kb_intents(intent_result),
             )
 
-            messages = build_messages(
-                memory_context,
+            prompt_nodes = self._prompt_nodes(intent_result)
+            has_evidence = bool(retrieved_sources or mcp_result.context.strip())
+            prompt_plan = build_prompt_plan(
                 request.message,
                 retrieved_sources=retrieved_sources,
                 retrieval_attempted=self._has_kb_intents(intent_result),
                 mcp_context=mcp_result.context,
                 mcp_attempted=self._has_mcp_intents(intent_result),
+                sub_questions=self._prompt_sub_questions(intent_result),
+                prompt_template=(
+                    str(getattr(prompt_nodes[0], "prompt_template", "") or "")
+                    if has_evidence and len(prompt_nodes) == 1
+                    else None
+                ),
+                prompt_snippets=(
+                    [str(getattr(node, "prompt_snippet", "") or "") for node in prompt_nodes]
+                    if has_evidence
+                    else []
+                ),
             )
+            messages = build_messages_from_plan(memory_context, prompt_plan)
             answer_started_at = time.perf_counter()
             try:
-                result = await self._llm_service.complete(messages, use_tools=False)
+                result = await self._complete_answer(messages, prompt_plan)
             except Exception:
                 record_stage(
                     "answer_generation",
@@ -236,6 +253,43 @@ class ChatService:
 
     def _has_mcp_intents(self, intent_result: Any | None) -> bool:
         return bool(getattr(intent_result, "mcp_intents", None))
+
+    def _prompt_sub_questions(self, intent_result: Any | None) -> list[str]:
+        rewrite_result = getattr(intent_result, "rewrite_result", None)
+        return list(getattr(rewrite_result, "sub_questions", []) or [])
+
+    def _prompt_nodes(self, intent_result: Any | None) -> list[Any]:
+        nodes: list[Any] = []
+        seen: set[str] = set()
+        for sub_intent in list(getattr(intent_result, "sub_intents", []) or []):
+            for node_score in list(getattr(sub_intent, "node_scores", []) or []):
+                node = getattr(node_score, "node", None)
+                node_id = str(getattr(node, "id", "") or "")
+                if node is not None and node_id not in seen:
+                    nodes.append(node)
+                    seen.add(node_id)
+        return nodes
+
+    async def _complete_answer(
+        self,
+        messages: list[dict[str, str]],
+        prompt_plan: PromptBuildPlan,
+    ) -> Any:
+        complete = self._llm_service.complete
+        parameters = inspect.signature(complete).parameters.values()
+        supports_generation_options = any(
+            parameter.name in {"temperature", "top_p"}
+            or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        if supports_generation_options:
+            return await complete(
+                messages,
+                use_tools=False,
+                temperature=prompt_plan.temperature,
+                top_p=prompt_plan.top_p,
+            )
+        return await complete(messages, use_tools=False)
 
     async def _execute_mcp_tools(self, intent_result: Any | None) -> Any:
         from agent_service.mcp.execution import McpExecutionResult

@@ -26,6 +26,9 @@ class LLMService:
         self,
         messages: list[dict[str, str]],
         use_tools: bool = True,
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
     ) -> LLMResult:
         settings = get_settings()
         if settings.agent_mock_mode:
@@ -43,6 +46,8 @@ class LLMService:
                 messages,
                 settings.agent_max_steps,
                 use_tools=use_tools,
+                temperature=temperature,
+                top_p=top_p,
             )
         except FunctionCallingUnavailable as exc:
             raise ModelUnavailableError(

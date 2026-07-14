@@ -194,7 +194,9 @@ async def test_chat_service_uses_kb_intents_to_ground_prompt_and_sources(monkeyp
 
     assert retrieval_pipeline.calls[0].question == "return policy"
     assert retrieval_pipeline.calls[0].fallback_queries == ["return policy"]
-    assert "Eligible items may be returned within seven days." in llm_service.messages[0]["content"]
+    assert "Eligible items may be returned within seven days." in (
+        llm_service.messages[-1]["content"]
+    )
     assert response.sources[0].title == "return-policy.md"
     assert response.sources[0].id == "chunk-1"
     assert response.sources[0].collectionName == "test111"
@@ -223,8 +225,9 @@ async def test_chat_service_adds_mcp_context_and_tool_calls_when_mcp_intent_is_h
         )
     )
 
-    assert "Real-time MCP context follows" in llm_service.messages[0]["content"]
-    assert "REFUND_PROCESSING" in llm_service.messages[0]["content"]
+    assert "real-time business data" in llm_service.messages[0]["content"]
+    assert "<tool-data>" in llm_service.messages[-1]["content"]
+    assert "REFUND_PROCESSING" in llm_service.messages[-1]["content"]
     assert response.toolCalls == ["order_query"]
 
 

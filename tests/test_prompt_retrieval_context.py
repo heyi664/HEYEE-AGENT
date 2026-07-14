@@ -5,7 +5,7 @@ from agent_service.rag.schemas import RetrievedSource
 from agent_service.services.prompt_service import build_messages
 
 
-def test_build_messages_adds_retrieved_sources_to_the_system_prompt() -> None:
+def test_build_messages_adds_retrieved_sources_next_to_the_user_question() -> None:
     messages = build_messages(
         MemoryContext(),
         "return policy",
@@ -18,8 +18,9 @@ def test_build_messages_adds_retrieved_sources_to_the_system_prompt() -> None:
         retrieval_attempted=True,
     )
 
-    assert "Answer only from this context." in messages[0]["content"]
-    assert "Eligible items may be returned within seven days." in messages[0]["content"]
+    assert "only source of business facts" in messages[0]["content"]
+    assert "Eligible items may be returned within seven days." in messages[-1]["content"]
+    assert messages[-1]["content"].endswith("<question>return policy</question>")
 
 
 def test_build_messages_requires_insufficient_knowledge_response_when_search_is_empty() -> None:
@@ -29,5 +30,5 @@ def test_build_messages_requires_insufficient_knowledge_response_when_search_is_
         retrieval_attempted=True,
     )
 
-    assert "does not provide enough information" in messages[0]["content"]
-    assert "Do not answer from general knowledge" in messages[0]["content"]
+    assert "<kb-status>" in messages[-1]["content"]
+    assert "No usable knowledge-base evidence" in messages[-1]["content"]

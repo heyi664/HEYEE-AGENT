@@ -21,6 +21,8 @@ from agent_service.core.logging import configure_logging
 from agent_service.mcp.adapter import register_mcp_tools
 from agent_service.mcp.http_client import StreamableHttpMcpClient
 from agent_service.middleware.upload_rate_limit import UploadRateLimitMiddleware
+from agent_service.services.stream_queue_limiter import stream_queue_limiter
+from agent_service.services.stream_task_manager import stream_task_manager
 from agent_service.tools.builtin import register_builtin_tools
 from agent_service.tools.registry import tool_registry
 
@@ -32,6 +34,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     mcp_client: StreamableHttpMcpClient | None = None
     register_builtin_tools(tool_registry)
+    await stream_task_manager.start(
+        redis_url=settings.stream_cancel_redis_url,
+        key_prefix=settings.stream_cancel_key_prefix,
+        channel=settings.stream_cancel_channel,
+        ttl_seconds=settings.stream_cancel_ttl_seconds,
+        max_tasks=settings.stream_cancel_max_tasks,
+    )
+    await stream_queue_limiter.start(
+        enabled=settings.stream_queue_enabled,
+        max_concurrent=settings.stream_queue_max_concurrent,
+        max_wait_seconds=settings.stream_queue_max_wait_seconds,
+        lease_seconds=settings.stream_queue_lease_seconds,
+        poll_interval_ms=settings.stream_queue_poll_interval_ms,
+        redis_url=settings.stream_queue_redis_url,
+        key_prefix=settings.stream_queue_key_prefix,
+    )
     app.state.mcp_client = None
     app.state.mcp_tools = []
 
@@ -70,6 +88,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if mcp_client is not None:
             await mcp_client.close()
+        await stream_queue_limiter.close()
+        await stream_task_manager.close()
 
 
 def create_app() -> FastAPI:

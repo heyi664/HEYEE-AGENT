@@ -379,6 +379,26 @@ button {
     word-break: break-word;
 }
 
+.interrupted-tag {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: #a66a00;
+  background: #fff4df;
+  font-size: 12px;
+}
+
+.queue-tag {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: #285ea8;
+  background: #eaf3ff;
+  font-size: 12px;
+}
+
 .markdown-body {
     white-space: normal;
 }

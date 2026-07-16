@@ -103,6 +103,56 @@ tools. A connection/discovery failure is logged and does not prevent the Agent s
 starting when `MCP_FAIL_FAST=false`; MCP intent execution is then rendered as unavailable rather
 than fabricated as real-time data.
 
+### Distributed Stream Cancellation
+
+Single-instance development needs no additional configuration. To coordinate stop requests across
+multiple Agent instances, point every instance to the same Redis deployment:
+
+```env
+STREAM_CANCEL_REDIS_URL=redis://:password@redis-host:6379/0
+STREAM_CANCEL_KEY_PREFIX=heyee:stream:cancel
+STREAM_CANCEL_CHANNEL=heyee:stream:cancel
+STREAM_CANCEL_TTL_SECONDS=1800
+STREAM_CANCEL_MAX_TASKS=10000
+```
+
+The cancellation endpoint writes a TTL-protected Redis marker before publishing `taskId` through
+Redis Pub/Sub. Every instance subscribes to the channel; the instance holding the LLM HTTP stream
+finds its local cancellation handle and aborts that stream. Redis is not read per token: token
+callbacks use a local cancellation flag, while Redis is checked only at task registration to
+close the cancel-before-register race. A cancelled task keeps its local tombstone until the same
+TTL expires, so delayed callbacks cannot resume delivery. If partial-answer persistence fails,
+the error is logged but `cancel`/`done` still close the stream.
+
+### Stream Admission Control
+
+RAG requests are long-running streams, so a QPS limit alone cannot protect model concurrency.
+The service therefore admits a bounded number of streams before `ChatService.prepare` begins:
+
+```env
+STREAM_QUEUE_ENABLED=true
+# Leave empty for one-process local FIFO mode.
+# Set the same Redis URL on every instance for cluster-wide fairness.
+STREAM_QUEUE_REDIS_URL=redis://:password@redis-host:6379/0
+STREAM_QUEUE_KEY_PREFIX=heyee:stream:queue
+STREAM_QUEUE_MAX_CONCURRENT=3
+STREAM_QUEUE_MAX_WAIT_SECONDS=20
+STREAM_QUEUE_LEASE_SECONDS=600
+STREAM_QUEUE_POLL_INTERVAL_MS=200
+```
+
+Without `STREAM_QUEUE_REDIS_URL`, development uses an in-process FIFO queue. With Redis, all
+instances share a FIFO waiting ZSET, a monotonic sequence, per-request TTL entry markers, and an
+expiring permit ZSET. A Lua claim script atomically removes stale queue entries, verifies that a
+request is inside the first `max_concurrent` live positions, and allocates a lease. Redis Pub/Sub
+wakes waiting instances after a release, while polling remains as a fallback. Permit leases are
+renewed during a stream and recover automatically after a crashed worker.
+
+If Redis is explicitly configured but unavailable, admission returns `queue_unavailable` rather
+than silently falling back to per-instance limits. This prevents a multi-instance deployment from
+over-admitting model streams. A queue timeout returns `queue_timeout`; a queued task can still be
+cancelled immediately through the existing stream cancellation endpoint.
+
 ### Embedding
 
 当前 Embedding 方案：硅基流动 OpenAI-compatible API + `BAAI/bge-m3`。
@@ -189,6 +239,9 @@ SSE. This is intentionally not browser `EventSource`, because the request includ
 ```text
 browser fetch POST
   -> /v1/agent/chat/stream
+  -> immediately receive meta(taskId, phase=queued)
+  -> stream admission (local FIFO or Redis shared FIFO + expiring permit)
+  -> meta(taskId, phase=preparing)
   -> ChatService.prepare
   -> parallel KB retrieval + MCP execution
   -> Prompt scene selection
@@ -203,12 +256,15 @@ The stream endpoint emits the following events:
 
 | Event | Payload | Meaning |
 | --- | --- | --- |
-| `meta` | `taskId`, `conversationId`, `ragIntent`, `sources` | Stream initialized; the client stores IDs for later cancellation. |
+| `meta` | `taskId`, `phase=queued|preparing|answering`; `answering` also includes conversation and retrieval metadata | The client gets `taskId` before queue admission, allowing an early stop request. |
 | `message` | `type=think|response`, `delta` | Incremental reasoning or answer text. |
 | `finish` | `messageId`, `title`, `sources`, `toolCalls`, `ragIntent` | Assistant reply persisted successfully. |
 | `error` | `message`, optional `detail` | Preparation or model streaming failed. |
-| `cancel` | `taskId` | The active stream was cancelled. |
+| `cancel` | `taskId`, `messageId`, `title`, `partial` | The active stream was cancelled; non-empty generated text is persisted as an interrupted reply when storage is available. |
 | `done` | `taskId` | Terminal event; clients should release the reader. |
+
+`queue_timeout` and `queue_unavailable` are returned as `error.code` values before preparation;
+no model request is started in either case.
 
 Cancel a running stream with:
 
@@ -216,9 +272,11 @@ Cancel a running stream with:
 POST /v1/agent/chat/stream/{taskId}/cancel
 ```
 
-The browser also aborts its fetch request when the user clicks **停止**. The current task manager
-is process-local; a multi-instance deployment must replace it with shared task state and a
-Redis Pub/Sub cancellation broadcast.
+When the user clicks **停止**, the browser first calls the cancellation endpoint and keeps its
+reader open for `cancel` and `done`; it falls back to aborting `fetch` only if that request fails.
+The task manager keeps a local `taskId -> handle` registry for fast token-loop checks. When
+`STREAM_CANCEL_REDIS_URL` is configured it also persists cancellation markers and subscribes to
+Redis Pub/Sub, so stop requests can land on a different instance from the active LLM stream.
 
 ### Knowledge Upload Flow
 
@@ -429,6 +487,7 @@ FastAPI 应用入口。
 - `prepare()` 统一执行会话记忆、RAG/MCP 检索、Prompt 组装等前置步骤
 - 同步路径调用 `LLMService`，流式路径复用预处理结果
 - 在完成时持久化 assistant 消息、更新会话标题和指标
+- 用户停止且已有正文时，持久化部分回答并标记为 `interrupted`
 
 ### `agent_service/services/stream_chat_service.py`
 
@@ -436,7 +495,17 @@ FastAPI 应用入口。
 
 - 将预处理、模型增量回调、SSE 事件和最终持久化串成一条链路
 - 输出 `meta`、`message`、`finish`、`error`、`cancel`、`done` 事件
-- 支持浏览器断连和显式取消；已取消的请求不会写入不完整的 assistant 消息
+- 在预处理前先注册并发送 `taskId`，覆盖“取消先到、任务后注册”的竞态
+- 支持浏览器断连和显式取消；取消后保存非空部分回答并发送 `cancel(messageId)`
+- 在 RAG 预处理前接入公平并发准入，排队期间也可取消
+
+### `agent_service/services/stream_queue_limiter.py`
+
+流式请求准入控制服务。
+
+- 单实例使用本地 FIFO 队列，适合未配置 Redis 的开发环境
+- 多实例使用 Redis FIFO ZSET、单调序号、entry TTL、可过期 permit 和 Pub/Sub 唤醒
+- 通过 Lua 原子认领队首并发窗口，避免跨节点重复放行；许可租约自动续期和兜底回收
 
 ### `agent_service/services/stream_llm_service.py`
 
@@ -448,11 +517,12 @@ FastAPI 应用入口。
 
 ### `agent_service/services/stream_task_manager.py`
 
-进程内流式任务管理器。
+流式任务管理器。
 
-- 维护 `taskId -> StreamCancellationHandle` 映射
-- 为取消接口和客户端断连提供统一取消入口
-- 多实例部署时需替换为 Redis 等共享状态和取消广播实现
+- 维护本地 `taskId -> cancellation handle` 映射，供 Token 回调低延迟检查
+- 使用本地取消标志和句柄中断，避免将取消导致的 I/O 异常误报为模型错误
+- 可选 Redis Key（TTL）+ Pub/Sub：先持久化取消标记、后广播，支持跨实例取消
+- 注册时读取 Redis 标记、绑定句柄时再次检查本地状态，覆盖两个关键时序竞态
 
 ### `agent_service/services/llm_service.py`
 
@@ -923,7 +993,8 @@ Prompt 服务测试。
 流式聊天链路测试。
 
 - 正常输出 `meta`、思考/正文增量、`finish` 和 `done`
-- 取消后输出 `cancel/done` 且不持久化不完整回答
+- 取消后输出 `cancel/done`，并持久化非空部分回答为已中断消息
+- 覆盖取消先到、任务后注册的 Redis 标记兜底竞态
 - 模型异常时输出 `error/done` 并记录失败状态
 
 ### `tests/test_upload_rate_limit.py`

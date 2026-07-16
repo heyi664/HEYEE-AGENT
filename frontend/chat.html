@@ -56,7 +56,7 @@
         <div class="header-actions">
           <div class="status-pill">
             <span class="status-dot"></span>
-            {{loading ? "回复生成中" : "在线"}}
+            {{loading ? streamStatusText : "在线"}}
           </div>
           <button class="header-btn" @click="clearChat"><i class="el-icon-delete"></i>清空</button>
         </div>
@@ -81,6 +81,8 @@
           <div class="avatar" v-if="m.role === 'assistant'">AI</div>
           <div class="message-bubble">
             <div class="message-author">{{m.role === "user" ? "我" : "HYEEE AI"}}</div>
+            <div class="interrupted-tag" v-if="m.role === 'assistant' && m.interrupted">回答已中断</div>
+            <div class="queue-tag" v-if="m.role === 'assistant' && m.streaming && m.streamPhase === 'queued'">排队等待中</div>
             <div class="message-text" v-if="m.role === 'user'">{{m.content}}</div>
             <div
               class="message-text markdown-body"
@@ -167,7 +169,7 @@
         <div class="panel-title">会话状态</div>
         <div class="stat-row"><span>会话编号</span><strong>{{conversationId || "未创建"}}</strong></div>
         <div class="stat-row"><span>消息总数</span><strong>{{messages.length}}</strong></div>
-        <div class="stat-row"><span>接口地址</span><strong>/v1/agent/chat</strong></div>
+        <div class="stat-row"><span>接口地址</span><strong>/v1/agent/chat/stream</strong></div>
       </div>
       <div class="panel-card muted">
         <div class="panel-title">提示</div>
@@ -190,6 +192,7 @@
     data: {
       inputText: "",
       loading: false,
+      streamPhase: "",
       activeTaskId: "",
       streamAbortController: null,
       conversationId: sessionStorage.getItem("hyeee_ai_conversation_id") || "",
@@ -209,6 +212,11 @@
     computed: {
       canSend() {
         return this.inputText.trim().length > 0 && !this.loading;
+      },
+      streamStatusText() {
+        if (this.streamPhase === "queued") return "排队等待中";
+        if (this.streamPhase === "preparing") return "正在检索";
+        return "回复生成中";
       },
       userMessageCount() {
         return this.messages.filter(m => m.role === "user").length;
@@ -280,6 +288,7 @@
           content: "",
           thinking: "",
           sources: [],
+          streamPhase: "queued",
           streaming: true,
           time: this.nowTime()
         };
@@ -315,6 +324,7 @@
             assistantMessage.content = "本次回答已停止。";
           }
           this.activeTaskId = "";
+          this.streamPhase = "";
           this.streamAbortController = null;
           this.loading = false;
           this.persistMessages();
@@ -349,6 +359,8 @@
         try { data = JSON.parse(dataLines.join("\n")); } catch (e) { return; }
         if (eventName === "meta") {
           this.activeTaskId = data.taskId || "";
+          this.streamPhase = data.phase || this.streamPhase;
+          assistantMessage.streamPhase = this.streamPhase;
           if (data.conversationId) {
             this.conversationId = data.conversationId;
             sessionStorage.setItem("hyeee_ai_conversation_id", this.conversationId);
@@ -359,23 +371,39 @@
           if (data.type === "think") assistantMessage.thinking += data.delta || "";
           if (data.type === "response") assistantMessage.content += data.delta || "";
         } else if (eventName === "finish") {
+          assistantMessage.streamPhase = "finished";
+          assistantMessage.messageId = data.messageId || assistantMessage.messageId;
           assistantMessage.ragIntent = data.ragIntent || assistantMessage.ragIntent;
           assistantMessage.sources = data.sources || assistantMessage.sources;
         } else if (eventName === "error") {
+          assistantMessage.streamPhase = "failed";
           assistantMessage.content = assistantMessage.content || data.message || "AI 流式回答失败。";
           assistantMessage.error = true;
         } else if (eventName === "cancel") {
+          assistantMessage.streamPhase = "cancelled";
+          assistantMessage.messageId = data.messageId || assistantMessage.messageId;
+          assistantMessage.interrupted = true;
+          assistantMessage.ragIntent = data.ragIntent || assistantMessage.ragIntent;
+          assistantMessage.sources = data.sources || assistantMessage.sources;
           assistantMessage.content = assistantMessage.content || "本次回答已停止。";
         }
       },
       async cancelStream() {
         const taskId = this.activeTaskId;
+        let cancelAccepted = false;
         if (taskId) {
           try {
-            await fetch("/v1/agent/chat/stream/" + encodeURIComponent(taskId) + "/cancel", { method: "POST" });
+            const response = await fetch(
+              "/v1/agent/chat/stream/" + encodeURIComponent(taskId) + "/cancel",
+              { method: "POST" }
+            );
+            cancelAccepted = response.ok;
           } catch (e) {}
         }
-        if (this.streamAbortController) this.streamAbortController.abort();
+        // Keep the SSE/fetch reader alive after a successful stop request so it can receive
+        // cancel(messageId) and done. Abort is only the fallback when no task is known or the
+        // stop request itself could not reach the server.
+        if (!cancelAccepted && this.streamAbortController) this.streamAbortController.abort();
       },
       renderMarkdown(content) {
         const source = String(content || "");

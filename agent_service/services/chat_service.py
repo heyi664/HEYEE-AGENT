@@ -202,6 +202,7 @@ class ChatService:
         reply: str,
         tool_calls: list[str],
         answer_started_at: float,
+        interrupted: bool = False,
     ) -> ChatResponse:
         record_stage(
             "answer_generation",
@@ -209,7 +210,7 @@ class ChatService:
             promptMessageCount=len(preparation.messages),
             replyChars=len(reply),
             sourceCount=len(preparation.retrieved_sources),
-            status="success",
+            status="cancelled" if interrupted else "success",
             toolCallCount=len(preparation.mcp_result.tool_calls) + len(tool_calls),
         )
         message_id = await self._persist_assistant_reply(preparation, reply)
@@ -219,9 +220,11 @@ class ChatService:
             elapsed_ms=elapsed_ms,
             sourceCount=len(preparation.retrieved_sources),
             toolCallCount=len(preparation.mcp_result.tool_calls) + len(tool_calls),
+            status="cancelled" if interrupted else "success",
         )
         logger.info(
-            "chat completed conversationId=%s userId=%s elapsedMs=%s",
+            "chat %s conversationId=%s userId=%s elapsedMs=%s",
+            "cancelled" if interrupted else "completed",
             preparation.conversation_id,
             preparation.user_id,
             elapsed_ms,
@@ -229,6 +232,7 @@ class ChatService:
         response = ChatResponse(
             conversationId=preparation.conversation_id,
             messageId=message_id,
+            interrupted=interrupted,
             reply=reply,
             sources=[self._to_chat_source(source) for source in preparation.retrieved_sources],
             toolCalls=preparation.mcp_result.tool_calls + tool_calls,

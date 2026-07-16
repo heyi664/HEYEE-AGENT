@@ -40,5 +40,5 @@ async def cancel_stream_chat(
     task_id: str,
     stream_service: StreamChatService = Depends(get_stream_chat_service),
 ) -> JSONResponse:
-    return JSONResponse({"taskId": task_id, "cancelled": stream_service.cancel(task_id)})
+    return JSONResponse({"taskId": task_id, "cancelled": await stream_service.cancel(task_id)})
 

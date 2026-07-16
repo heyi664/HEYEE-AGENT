@@ -12,15 +12,18 @@ from agent_service.schemas.chat import ChatRequest, ChatResponse
 from agent_service.services.chat_service import ChatPreparation
 from agent_service.services.prompt_service import PromptBuildPlan, PromptScene
 from agent_service.services.stream_chat_service import StreamChatService
+from agent_service.services.stream_queue_limiter import StreamQueueLimiter
 from agent_service.services.stream_task_manager import StreamTaskManager
 
 
 class FakeChatService:
     def __init__(self) -> None:
         self.failures = 0
-        self.completed: list[str] = []
+        self.completed: list[tuple[str, bool]] = []
+        self.prepare_calls = 0
 
     async def prepare(self, request: ChatRequest) -> ChatPreparation:
+        self.prepare_calls += 1
         return ChatPreparation(
             started_at=time.perf_counter(),
             settings=object(),
@@ -52,11 +55,13 @@ class FakeChatService:
         reply: str,
         tool_calls: list[str],
         answer_started_at: float,
+        interrupted: bool = False,
     ) -> ChatResponse:
-        self.completed.append(reply)
+        self.completed.append((reply, interrupted))
         return ChatResponse(
             conversationId=preparation.conversation_id,
             messageId="msg_stream",
+            interrupted=interrupted,
             reply=reply,
             sources=[],
             toolCalls=tool_calls,
@@ -67,12 +72,82 @@ class FakeChatService:
         return source
 
 
+class BlockingPreparationChatService(FakeChatService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.prepare_started = asyncio.Event()
+        self.prepare_cancelled = False
+
+    async def prepare(self, request: ChatRequest) -> ChatPreparation:
+        self.prepare_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.prepare_cancelled = True
+            raise
+        raise AssertionError("blocking preparation unexpectedly completed")
+
+
+class FailingInterruptedPersistenceChatService(FakeChatService):
+    async def complete_preparation(
+        self,
+        preparation: ChatPreparation,
+        *,
+        reply: str,
+        tool_calls: list[str],
+        answer_started_at: float,
+        interrupted: bool = False,
+    ) -> ChatResponse:
+        if interrupted:
+            raise RuntimeError("database unavailable")
+        return await super().complete_preparation(
+            preparation,
+            reply=reply,
+            tool_calls=tool_calls,
+            answer_started_at=answer_started_at,
+            interrupted=interrupted,
+        )
+
+
 class FakeHandle:
     def __init__(self) -> None:
         self.cancelled = False
 
     def cancel(self) -> None:
         self.cancelled = True
+
+
+class FakeDistributedCancellationBackend:
+    def __init__(self) -> None:
+        self.cancelled: set[str] = set()
+        self.operations: list[str] = []
+        self.on_cancel: Any = None
+
+    async def start(self, on_cancel: Any) -> bool:
+        self.on_cancel = on_cancel
+        return True
+
+    async def mark_cancelled(self, task_id: str) -> bool:
+        self.operations.append(f"mark:{task_id}")
+        self.cancelled.add(task_id)
+        return True
+
+    async def publish_cancel(self, task_id: str) -> bool:
+        self.operations.append(f"publish:{task_id}")
+        if self.on_cancel is not None:
+            self.on_cancel(task_id)
+        return True
+
+    async def is_cancelled(self, task_id: str) -> bool:
+        self.operations.append(f"read:{task_id}")
+        return task_id in self.cancelled
+
+    async def clear(self, task_id: str) -> None:
+        self.operations.append(f"clear:{task_id}")
+        self.cancelled.discard(task_id)
+
+    async def close(self) -> None:
+        return None
 
 
 class FakeStreamLLMService:
@@ -126,21 +201,25 @@ async def test_stream_chat_emits_meta_deltas_finish_and_done() -> None:
 
     assert [name for name, _ in events] == [
         "meta",
+        "meta",
+        "meta",
         "message",
         "message",
         "message",
         "finish",
         "done",
     ]
-    assert events[0][1]["conversationId"] == "conv_stream"
-    assert events[1][1] == {"type": "think", "delta": "analyzing"}
-    assert events[2][1] == {"type": "response", "delta": "Hello"}
-    assert events[4][1]["messageId"] == "msg_stream"
-    assert chat.completed == ["Hello world"]
+    assert events[0][1] == {"taskId": "task_1", "phase": "queued"}
+    assert events[1][1] == {"taskId": "task_1", "phase": "preparing"}
+    assert events[2][1]["conversationId"] == "conv_stream"
+    assert events[3][1] == {"type": "think", "delta": "analyzing"}
+    assert events[4][1] == {"type": "response", "delta": "Hello"}
+    assert events[6][1]["messageId"] == "msg_stream"
+    assert chat.completed == [("Hello world", False)]
 
 
 @pytest.mark.asyncio
-async def test_stream_chat_cancellation_emits_cancel_and_does_not_persist_reply() -> None:
+async def test_stream_chat_cancellation_before_preparation_emits_cancel() -> None:
     manager = StreamTaskManager()
     chat = FakeChatService()
     service = StreamChatService(
@@ -155,14 +234,145 @@ async def test_stream_chat_cancellation_emits_cancel_and_does_not_persist_reply(
 
     meta = await anext(stream)
     assert _parse_events([meta])[0][0] == "meta"
-    next_chunk = asyncio.create_task(anext(stream))
-    await asyncio.sleep(0)
-    assert service.cancel("task_cancel") is True
-    remaining = [await next_chunk, *[chunk async for chunk in stream]]
+    assert await service.cancel("task_cancel") is True
+    remaining = [chunk async for chunk in stream]
 
     assert [name for name, _ in _parse_events(remaining)] == ["cancel", "done"]
     assert chat.completed == []
-    assert manager.contains("task_cancel") is False
+    assert manager.contains("task_cancel") is True
+    assert manager.is_cancelled("task_cancel") is True
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_times_out_before_preparation_when_queue_is_full() -> None:
+    limiter = StreamQueueLimiter(
+        max_concurrent=1,
+        max_wait_seconds=0.03,
+        poll_interval_seconds=0.01,
+    )
+
+    async def not_cancelled() -> bool:
+        return False
+
+    held = await limiter.acquire("occupying-task", should_cancel=not_cancelled)
+    chat = FakeChatService()
+    service = StreamChatService(
+        chat_service=chat,
+        llm_service=FakeStreamLLMService([]),
+        task_manager=StreamTaskManager(),
+        queue_limiter=limiter,
+    )
+
+    events = _parse_events(
+        [
+            chunk
+            async for chunk in service.stream(
+                ChatRequest(message="hello"),
+                task_id="timed-out-task",
+            )
+        ]
+    )
+
+    assert [name for name, _ in events] == ["meta", "error", "done"]
+    assert events[0][1]["phase"] == "queued"
+    assert events[1][1]["code"] == "queue_timeout"
+    assert chat.prepare_calls == 0
+    await limiter.release(held.permit)
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_cancellation_interrupts_preparation_task() -> None:
+    manager = StreamTaskManager()
+    chat = BlockingPreparationChatService()
+    service = StreamChatService(
+        chat_service=chat,
+        llm_service=FakeStreamLLMService([]),
+        task_manager=manager,
+    )
+    stream = service.stream(ChatRequest(message="hello"), task_id="task_preparing")
+
+    assert _parse_events([await anext(stream)])[0][1]["phase"] == "queued"
+    assert _parse_events([await anext(stream)])[0][1]["phase"] == "preparing"
+    next_event = asyncio.create_task(anext(stream))
+    await asyncio.wait_for(chat.prepare_started.wait(), timeout=1)
+
+    assert await service.cancel("task_preparing") is True
+    cancel_event = _parse_events([await next_event])[0]
+    done_event = _parse_events([await anext(stream)])[0]
+
+    assert cancel_event[0] == "cancel"
+    assert done_event[0] == "done"
+    assert chat.prepare_cancelled is True
+    assert chat.completed == []
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_cancellation_persists_non_empty_partial_reply() -> None:
+    manager = StreamTaskManager()
+    chat = FakeChatService()
+    service = StreamChatService(
+        chat_service=chat,
+        llm_service=FakeStreamLLMService([("content", "partial answer")]),
+        task_manager=manager,
+    )
+    stream = service.stream(ChatRequest(message="hello"), task_id="task_partial")
+
+    assert _parse_events([await anext(stream)])[0][0] == "meta"
+    assert _parse_events([await anext(stream)])[0][0] == "meta"
+    assert _parse_events([await anext(stream)])[0][0] == "meta"
+    message = await anext(stream)
+    assert _parse_events([message])[0][1]["delta"] == "partial answer"
+
+    assert await service.cancel("task_partial") is True
+    remaining = _parse_events([chunk async for chunk in stream])
+
+    assert [name for name, _ in remaining] == ["cancel", "done"]
+    assert remaining[0][1]["partial"] is True
+    assert remaining[0][1]["messageId"] == "msg_stream"
+    assert chat.completed == [("partial answer", True)]
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_cancellation_still_finishes_when_partial_persistence_fails() -> None:
+    manager = StreamTaskManager()
+    chat = FailingInterruptedPersistenceChatService()
+    service = StreamChatService(
+        chat_service=chat,
+        llm_service=FakeStreamLLMService([("content", "partial answer")]),
+        task_manager=manager,
+    )
+    stream = service.stream(ChatRequest(message="hello"), task_id="task_partial_failure")
+
+    await anext(stream)
+    await anext(stream)
+    await anext(stream)
+    await anext(stream)
+    assert await service.cancel("task_partial_failure") is True
+    remaining = _parse_events([chunk async for chunk in stream])
+
+    assert [name for name, _ in remaining] == ["cancel", "done"]
+    assert remaining[0][1]["partial"] is False
+    assert remaining[0][1]["messageId"] is None
+
+
+@pytest.mark.asyncio
+async def test_task_manager_uses_persistent_marker_to_close_cancel_before_register_race() -> None:
+    backend = FakeDistributedCancellationBackend()
+    manager = StreamTaskManager(backend=backend)
+    await manager.start()
+
+    # This simulates a stop request landing on node A before node B has registered the task.
+    assert await manager.cancel("task_race") is True
+    assert backend.operations[:2] == ["mark:task_race", "publish:task_race"]
+
+    assert await manager.register("task_race") is True
+    handle = FakeHandle()
+    assert manager.bind("task_race", handle) is False
+    assert handle.cancelled is True
+    assert manager.is_cancelled("task_race") is True
+
+    await manager.finalize("task_race")
+    assert manager.contains("task_race") is True
 
 
 @pytest.mark.asyncio
@@ -180,7 +390,7 @@ async def test_stream_chat_emits_error_and_done_when_the_model_stream_fails() ->
     ]
     events = _parse_events(chunks)
 
-    assert [name for name, _ in events] == ["meta", "error", "done"]
-    assert "provider failed" in events[1][1]["message"]
+    assert [name for name, _ in events] == ["meta", "meta", "meta", "error", "done"]
+    assert "provider failed" in events[3][1]["message"]
     assert chat.failures == 1
     assert chat.completed == []

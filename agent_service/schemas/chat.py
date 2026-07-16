@@ -74,6 +74,7 @@ class ChatSource(BaseModel):
 class ChatResponse(BaseModel):
     conversationId: str
     messageId: str | None = None
+    interrupted: bool = False
     reply: str = Field(min_length=1)
     createdAt: str = Field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     sources: list[ChatSource] = Field(default_factory=list)

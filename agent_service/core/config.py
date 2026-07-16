@@ -65,6 +65,24 @@ class Settings(BaseSettings):
     memory_redis_url: str | None = None
     memory_lock_ttl_seconds: int = Field(default=120, ge=1, le=3600)
 
+    # Optional Redis coordination for cross-instance stream cancellation. Keep empty for
+    # local/single-instance development; cancellation still works through local memory.
+    stream_cancel_redis_url: str | None = None
+    stream_cancel_key_prefix: str = "heyee:stream:cancel"
+    stream_cancel_channel: str = "heyee:stream:cancel"
+    stream_cancel_ttl_seconds: int = Field(default=1800, ge=30, le=86400)
+    stream_cancel_max_tasks: int = Field(default=10000, ge=100, le=100000)
+
+    # Stream admission control. Without a Redis URL this remains a FIFO limiter for one
+    # process; set the URL on every instance to enforce one cluster-wide limit.
+    stream_queue_enabled: bool = True
+    stream_queue_redis_url: str | None = None
+    stream_queue_key_prefix: str = "heyee:stream:queue"
+    stream_queue_max_concurrent: int = Field(default=3, ge=1, le=1000)
+    stream_queue_max_wait_seconds: float = Field(default=20.0, gt=0, le=3600)
+    stream_queue_lease_seconds: float = Field(default=600.0, gt=0, le=86400)
+    stream_queue_poll_interval_ms: int = Field(default=200, ge=20, le=5000)
+
     rag_query_rewrite_enabled: bool = False
     rag_query_rewrite_history_turns: int = Field(default=2, ge=0, le=5)
     rag_query_rewrite_max_sub_questions: int = Field(default=5, ge=1, le=10)

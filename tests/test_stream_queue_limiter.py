@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from pydantic import ValidationError
 
+from agent_service.core.config import Settings
 from agent_service.services.stream_queue_limiter import (
     QueueAcquireStatus,
     StreamQueueLimiter,
@@ -86,3 +88,30 @@ async def test_disabled_queue_bypasses_admission_control() -> None:
     assert result.status == QueueAcquireStatus.GRANTED
     assert result.permit is not None
     assert result.permit.permit_id == "bypass:bypass"
+
+
+@pytest.mark.asyncio
+async def test_close_wakes_local_waiters_without_revoking_active_permits() -> None:
+    limiter = StreamQueueLimiter(
+        max_concurrent=1,
+        max_wait_seconds=5,
+        poll_interval_seconds=1,
+    )
+    first = await limiter.acquire("first", should_cancel=_not_cancelled)
+    waiting = asyncio.create_task(limiter.acquire("waiting", should_cancel=_not_cancelled))
+
+    await asyncio.sleep(0.01)
+    await limiter.close()
+
+    result = await asyncio.wait_for(waiting, timeout=0.3)
+    assert result.status == QueueAcquireStatus.UNAVAILABLE
+    await limiter.release(first.permit)
+
+
+def test_stream_queue_lease_must_outlast_visible_wait_window() -> None:
+    with pytest.raises(ValidationError, match="stream_queue_lease_seconds"):
+        Settings(
+            stream_queue_enabled=True,
+            stream_queue_max_wait_seconds=20,
+            stream_queue_lease_seconds=60,
+        )

@@ -41,6 +41,15 @@ class ChatPreparation:
     prompt_plan: PromptBuildPlan
 
 
+@dataclass(frozen=True)
+class QueueRejection:
+    """A persisted terminal response for a request rejected before RAG starts."""
+
+    conversation_id: str
+    message_id: str | None
+    title: str
+
+
 class ChatService:
     def __init__(
         self,
@@ -240,6 +249,61 @@ class ChatService:
         )
         return response
 
+    async def record_queue_rejection(
+        self,
+        request: ChatRequest,
+        *,
+        reply: str,
+    ) -> QueueRejection:
+        """Persist a queue-timeout reply without starting retrieval or model generation.
+
+        A queued request is still a user turn.  Recording both sides of that turn makes the
+        rejection understandable in conversation history and keeps the next user request in
+        the same conversation instead of appearing to disappear.
+        """
+
+        settings = get_settings()
+        conversation_id = request.conversationId or f"conv_{uuid4().hex[:12]}"
+        user_id = str(request.userId or 0)
+        message_id: str | None = None
+        persist_started_at = time.perf_counter()
+
+        with bind_conversation(conversation_id):
+            memory_service = self._resolve_memory_service(
+                settings.database_url,
+                settings.agent_mock_mode,
+            )
+            if settings.memory_enabled and memory_service is not None:
+                try:
+                    memory_service.load_and_append(conversation_id, user_id, request.message)
+                    message_id = await self._persist_memory_reply(
+                        memory_service,
+                        settings=settings,
+                        conversation_id=conversation_id,
+                        user_id=user_id,
+                        reply=reply,
+                    )
+                    status = "success"
+                except Exception:
+                    # A storage incident must not turn a clear queue rejection into a hanging
+                    # SSE request.  The caller still emits reject/finish/done with no message id.
+                    logger.exception(
+                        "failed to persist queue rejection conversationId=%s", conversation_id
+                    )
+                    status = "failed"
+            else:
+                status = "disabled"
+            record_stage(
+                "stream_queue_rejection",
+                elapsed_ms=_elapsed_ms(persist_started_at),
+                persistence=status,
+            )
+        return QueueRejection(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            title=request.message[:128],
+        )
+
     async def _persist_assistant_reply(
         self,
         preparation: ChatPreparation,
@@ -247,19 +311,28 @@ class ChatService:
     ) -> str | None:
         if not preparation.memory_enabled or preparation.memory_service is None:
             return None
+        return await self._persist_memory_reply(
+            preparation.memory_service,
+            settings=preparation.settings,
+            conversation_id=preparation.conversation_id,
+            user_id=preparation.user_id,
+            reply=reply,
+        )
+
+    async def _persist_memory_reply(
+        self,
+        memory_service: Any,
+        *,
+        settings: Any,
+        conversation_id: str,
+        user_id: str,
+        reply: str,
+    ) -> str | None:
         persist_started_at = time.perf_counter()
-        message_id = preparation.memory_service.append(
-            preparation.conversation_id,
-            preparation.user_id,
-            "assistant",
-            reply,
-        )
-        compression_result = preparation.memory_service.compress_if_needed(
-            preparation.conversation_id,
-            preparation.user_id,
-        )
+        message_id = memory_service.append(conversation_id, user_id, "assistant", reply)
+        compression_result = memory_service.compress_if_needed(conversation_id, user_id)
         if inspect.isawaitable(compression_result):
-            if preparation.settings.memory_async_compress:
+            if settings.memory_async_compress:
                 self._run_background_compression(compression_result)
                 compression_mode = "async"
             else:

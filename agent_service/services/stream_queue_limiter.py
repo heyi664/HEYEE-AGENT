@@ -106,6 +106,8 @@ return 1
         self._distributed = False
         self._unavailable = False
         self._running = False
+        self._closing = False
+        self._distributed_waiting: set[str] = set()
 
         self._local_condition = asyncio.Condition()
         self._local_waiting: deque[_LocalWaiter] = deque()
@@ -134,6 +136,8 @@ return 1
         self._redis_url = redis_url
         self._key_prefix = key_prefix.rstrip(":")
         self._unavailable = False
+        self._closing = False
+        self._notification.clear()
         if not enabled or not redis_url:
             return
         try:
@@ -156,6 +160,23 @@ return 1
             await self.close()
 
     async def close(self) -> None:
+        self._closing = True
+        self._notification.set()
+        async with self._local_condition:
+            # Active streams keep their local permit until their normal finally block releases
+            # it.  Only wake queued requests so they can leave with UNAVAILABLE immediately.
+            self._local_condition.notify_all()
+
+        client = self._client
+        waiting_task_ids = tuple(self._distributed_waiting)
+        self._distributed_waiting.clear()
+        if client is not None and waiting_task_ids:
+            try:
+                await client.zrem(self._queue_key, *waiting_task_ids)
+                await client.delete(*(self._entry_key(task_id) for task_id in waiting_task_ids))
+                await client.publish(self._notify_channel, "shutdown")
+            except Exception:
+                logger.warning("failed to clear queued stream tasks during shutdown")
         self._running = False
         self._distributed = False
         listener = self._listener
@@ -174,7 +195,6 @@ return 1
                 await pubsub.aclose()
             except Exception:
                 logger.warning("failed to close stream queue Redis subscription")
-        client = self._client
         self._client = None
         if client is not None:
             try:
@@ -193,7 +213,7 @@ return 1
                 QueueAcquireStatus.GRANTED,
                 StreamQueuePermit(task_id, f"bypass:{task_id}", False),
             )
-        if self._unavailable:
+        if self._closing or self._unavailable:
             return QueueAcquireResult(QueueAcquireStatus.UNAVAILABLE)
         if self._distributed:
             return await self._acquire_distributed(task_id, should_cancel=should_cancel)
@@ -258,6 +278,10 @@ return 1
         async with self._local_condition:
             self._local_waiting.append(waiter)
             while True:
+                if self._closing:
+                    self._remove_local_waiter(task_id)
+                    self._local_condition.notify_all()
+                    return QueueAcquireResult(QueueAcquireStatus.UNAVAILABLE)
                 if await should_cancel():
                     self._remove_local_waiter(task_id)
                     self._local_condition.notify_all()
@@ -292,6 +316,7 @@ return 1
             return QueueAcquireResult(QueueAcquireStatus.UNAVAILABLE)
         deadline = time.monotonic() + self._max_wait_seconds
         permit = StreamQueuePermit(task_id, uuid4().hex, True)
+        self._distributed_waiting.add(task_id)
         try:
             await client.set(self._entry_key(task_id), "1", ex=self._entry_ttl_seconds)
             score = await client.incr(self._sequence_key)
@@ -299,10 +324,20 @@ return 1
             await client.publish(self._notify_channel, "enqueue")
         except Exception:
             logger.exception("failed to enqueue stream taskId=%s", task_id)
+            self._distributed_waiting.discard(task_id)
             return QueueAcquireResult(QueueAcquireStatus.UNAVAILABLE)
 
         try:
             while True:
+                if self._closing:
+                    await self._remove_distributed_waiter(task_id, notify=True)
+                    return QueueAcquireResult(QueueAcquireStatus.UNAVAILABLE)
+                if self._unavailable:
+                    # The Pub/Sub listener can fail after this request has joined the queue.
+                    # Do not continue issuing claims against a coordination backend that is no
+                    # longer considered healthy; remove the entry and make the failure explicit.
+                    await self._remove_distributed_waiter(task_id, notify=False)
+                    return QueueAcquireResult(QueueAcquireStatus.UNAVAILABLE)
                 if await should_cancel():
                     await self._remove_distributed_waiter(task_id, notify=True)
                     return QueueAcquireResult(QueueAcquireStatus.CANCELLED)
@@ -341,8 +376,11 @@ return 1
         except asyncio.CancelledError:
             await self._remove_distributed_waiter(task_id, notify=True)
             raise
+        finally:
+            self._distributed_waiting.discard(task_id)
 
     async def _remove_distributed_waiter(self, task_id: str, *, notify: bool) -> None:
+        self._distributed_waiting.discard(task_id)
         client = self._client
         if client is None:
             return
@@ -374,6 +412,7 @@ return 1
         except Exception:
             if self._running:
                 self._unavailable = True
+                self._notification.set()
                 logger.exception("stream queue Redis subscriber stopped unexpectedly")
 
     @property

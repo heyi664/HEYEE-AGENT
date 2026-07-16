@@ -370,8 +370,14 @@
         } else if (eventName === "message") {
           if (data.type === "think") assistantMessage.thinking += data.delta || "";
           if (data.type === "response") assistantMessage.content += data.delta || "";
+        } else if (eventName === "reject") {
+          // Admission timed out before model execution. It is still a persisted assistant turn,
+          // so show its terminal content instead of treating it as a transport failure.
+          assistantMessage.streamPhase = "rejected";
+          assistantMessage.content += data.delta || data.message || "系统繁忙，请稍后重试。";
+          assistantMessage.rejected = true;
         } else if (eventName === "finish") {
-          assistantMessage.streamPhase = "finished";
+          assistantMessage.streamPhase = data.rejected ? "rejected" : "finished";
           assistantMessage.messageId = data.messageId || assistantMessage.messageId;
           assistantMessage.ragIntent = data.ragIntent || assistantMessage.ragIntent;
           assistantMessage.sources = data.sources || assistantMessage.sources;

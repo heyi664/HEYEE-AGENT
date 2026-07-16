@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -138,6 +138,26 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_stream_queue_lease(self) -> Settings:
+        """Keep the crash-recovery lease comfortably beyond the visible queue wait.
+
+        A worker can be delayed while claiming a permit, beginning preparation, or shutting
+        down.  The lease is a last-resort recovery mechanism, not the normal completion timer;
+        requiring at least three wait windows prevents an active stream from being admitted
+        twice merely because it exceeded the user-facing queue timeout.
+        """
+
+        if (
+            self.stream_queue_enabled
+            and self.stream_queue_lease_seconds <= self.stream_queue_max_wait_seconds * 3
+        ):
+            raise ValueError(
+                "stream_queue_lease_seconds must be greater than "
+                "stream_queue_max_wait_seconds * 3"
+            )
+        return self
 
 
 @lru_cache

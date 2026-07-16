@@ -150,8 +150,15 @@ renewed during a stream and recover automatically after a crashed worker.
 
 If Redis is explicitly configured but unavailable, admission returns `queue_unavailable` rather
 than silently falling back to per-instance limits. This prevents a multi-instance deployment from
-over-admitting model streams. A queue timeout returns `queue_timeout`; a queued task can still be
-cancelled immediately through the existing stream cancellation endpoint.
+over-admitting model streams. A queue timeout is a user-visible terminal result: it records the
+user message and `系统繁忙，请稍后重试。` as an assistant turn when conversation storage is
+available, then emits `reject -> finish -> done`. It never starts retrieval or a model request.
+A queued task can still be cancelled immediately through the existing stream cancellation endpoint.
+
+The permit lease is only a crash-recovery backstop. Configure
+`STREAM_QUEUE_LEASE_SECONDS > STREAM_QUEUE_MAX_WAIT_SECONDS * 3`; normal streams renew their
+lease and release it in `finally`. On shutdown, queued tasks are removed from Redis/local queues
+and awakened with `queue_unavailable`; active work retains its permit until its normal release.
 
 ### Embedding
 
@@ -258,13 +265,15 @@ The stream endpoint emits the following events:
 | --- | --- | --- |
 | `meta` | `taskId`, `phase=queued|preparing|answering`; `answering` also includes conversation and retrieval metadata | The client gets `taskId` before queue admission, allowing an early stop request. |
 | `message` | `type=think|response`, `delta` | Incremental reasoning or answer text. |
+| `reject` | `type=response`, `delta`, `code=queue_timeout` | Admission waited too long. The rejection is persisted as an assistant turn when storage is available. |
 | `finish` | `messageId`, `title`, `sources`, `toolCalls`, `ragIntent` | Assistant reply persisted successfully. |
 | `error` | `message`, optional `detail` | Preparation or model streaming failed. |
 | `cancel` | `taskId`, `messageId`, `title`, `partial` | The active stream was cancelled; non-empty generated text is persisted as an interrupted reply when storage is available. |
 | `done` | `taskId` | Terminal event; clients should release the reader. |
 
-`queue_timeout` and `queue_unavailable` are returned as `error.code` values before preparation;
-no model request is started in either case.
+`queue_timeout` uses the terminal `reject -> finish -> done` sequence before preparation; no
+model request is started. `queue_unavailable` remains an `error.code` because reliable queue
+coordination cannot be established.
 
 Cancel a running stream with:
 

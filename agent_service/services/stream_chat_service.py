@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from agent_service.core.observability import record_stage
 from agent_service.schemas.chat import ChatRequest
 from agent_service.services.chat_service import ChatPreparation, ChatService, get_chat_service
 from agent_service.services.stream_llm_service import StreamLLMService
@@ -21,6 +22,8 @@ from agent_service.services.stream_queue_limiter import (
 from agent_service.services.stream_task_manager import StreamTaskManager, stream_task_manager
 
 logger = logging.getLogger(__name__)
+
+_QUEUE_TIMEOUT_REPLY = "系统繁忙，请稍后重试。"
 
 
 @dataclass(frozen=True)
@@ -116,20 +119,38 @@ class StreamChatService:
                 yield _encode_event("done", {"taskId": task_id})
                 return
 
+            admission_started_at = time.perf_counter()
             admission = await self._queue_limiter.acquire(
                 task_id,
                 should_cancel=lambda: self._should_cancel(task_id, is_disconnected),
+            )
+            record_stage(
+                "stream_queue_admission",
+                elapsed_ms=int((time.perf_counter() - admission_started_at) * 1000),
+                distributed=bool(admission.permit and admission.permit.distributed),
+                status=admission.status,
             )
             if admission.status == QueueAcquireStatus.CANCELLED:
                 yield _encode_event("cancel", await cancelled_payload())
                 yield _encode_event("done", {"taskId": task_id})
                 return
             if admission.status == QueueAcquireStatus.TIMED_OUT:
+                rejection = await self._record_queue_rejection(request)
                 yield _encode_event(
-                    "error",
+                    "reject",
                     {
-                        "message": "Server is busy. Please try again shortly.",
+                        "type": "response",
+                        "delta": _QUEUE_TIMEOUT_REPLY,
                         "code": "queue_timeout",
+                    },
+                )
+                yield _encode_event(
+                    "finish",
+                    {
+                        "conversationId": rejection["conversationId"],
+                        "messageId": rejection["messageId"],
+                        "title": rejection["title"],
+                        "rejected": True,
                     },
                 )
                 yield _encode_event("done", {"taskId": task_id})
@@ -295,6 +316,30 @@ class StreamChatService:
         cancelled = await self._task_manager.cancel(task_id)
         await self._queue_limiter.cancel(task_id)
         return cancelled
+
+    async def _record_queue_rejection(self, request: ChatRequest) -> dict[str, str | None]:
+        """Best-effort persistence for a queue timeout's user-visible terminal response."""
+
+        fallback = {
+            "conversationId": request.conversationId,
+            "messageId": None,
+            "title": request.message[:128],
+        }
+        try:
+            rejection = await self._chat_service.record_queue_rejection(
+                request,
+                reply=_QUEUE_TIMEOUT_REPLY,
+            )
+        except Exception:
+            # Custom ChatService implementations may not yet expose the optional helper, and
+            # a history-store failure should never prevent the caller from receiving DONE.
+            logger.exception("failed to record queue rejection")
+            return fallback
+        return {
+            "conversationId": rejection.conversation_id,
+            "messageId": rejection.message_id,
+            "title": rejection.title,
+        }
 
     def _sources(self, preparation: ChatPreparation) -> list[Any]:
         return [self._chat_service._to_chat_source(item) for item in preparation.retrieved_sources]

@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,6 +21,7 @@ class FakeChatService:
     def __init__(self) -> None:
         self.failures = 0
         self.completed: list[tuple[str, bool]] = []
+        self.queue_rejections: list[tuple[str, str]] = []
         self.prepare_calls = 0
 
     async def prepare(self, request: ChatRequest) -> ChatPreparation:
@@ -70,6 +72,19 @@ class FakeChatService:
 
     def _to_chat_source(self, source: object) -> object:
         return source
+
+    async def record_queue_rejection(
+        self,
+        request: ChatRequest,
+        *,
+        reply: str,
+    ) -> SimpleNamespace:
+        self.queue_rejections.append((request.message, reply))
+        return SimpleNamespace(
+            conversation_id=request.conversationId or "conv_rejected",
+            message_id="msg_rejected",
+            title=request.message[:128],
+        )
 
 
 class BlockingPreparationChatService(FakeChatService):
@@ -273,10 +288,14 @@ async def test_stream_chat_times_out_before_preparation_when_queue_is_full() -> 
         ]
     )
 
-    assert [name for name, _ in events] == ["meta", "error", "done"]
+    assert [name for name, _ in events] == ["meta", "reject", "finish", "done"]
     assert events[0][1]["phase"] == "queued"
     assert events[1][1]["code"] == "queue_timeout"
+    assert events[1][1]["delta"] == "系统繁忙，请稍后重试。"
+    assert events[2][1]["messageId"] == "msg_rejected"
+    assert events[2][1]["rejected"] is True
     assert chat.prepare_calls == 0
+    assert chat.queue_rejections == [("hello", "系统繁忙，请稍后重试。")]
     await limiter.release(held.permit)
 
 

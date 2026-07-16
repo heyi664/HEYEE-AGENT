@@ -17,3 +17,15 @@ def test_health() -> None:
         "version": "0.1.0",
     }
 
+
+def test_readiness() -> None:
+    client = TestClient(create_app())
+
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json()["checks"] == {
+        "streamCancellation": True,
+        "streamQueue": True,
+    }
+

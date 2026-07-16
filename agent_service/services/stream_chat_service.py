@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from agent_service.core.config import get_settings
 from agent_service.core.observability import record_stage
 from agent_service.schemas.chat import ChatRequest
 from agent_service.services.chat_service import ChatPreparation, ChatService, get_chat_service
@@ -41,11 +42,17 @@ class StreamChatService:
         llm_service: StreamLLMService | None = None,
         task_manager: StreamTaskManager | None = None,
         queue_limiter: StreamQueueLimiter | None = None,
+        callback_queue_max_events: int | None = None,
     ) -> None:
         self._chat_service = chat_service or get_chat_service()
         self._llm_service = llm_service or StreamLLMService()
         self._task_manager = task_manager or stream_task_manager
         self._queue_limiter = queue_limiter or stream_queue_limiter
+        self._callback_queue_max_events = (
+            callback_queue_max_events
+            if callback_queue_max_events is not None
+            else get_settings().stream_callback_queue_max_events
+        )
 
     async def stream(
         self,
@@ -55,7 +62,8 @@ class StreamChatService:
         is_disconnected: Callable[[], Awaitable[bool]] | None = None,
     ) -> AsyncIterator[bytes]:
         task_id = task_id or f"task_{uuid4().hex[:16]}"
-        registered = await self._task_manager.register(task_id)
+        owner_id = str(request.userId) if request.userId is not None else "0"
+        registered = await self._task_manager.register(task_id, owner_id=owner_id)
         if not registered:
             yield _encode_event("error", {"message": "taskId is already active"})
             yield _encode_event("done", {"taskId": task_id})
@@ -203,8 +211,10 @@ class StreamChatService:
                 },
             )
 
-            queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
-            callback = _QueueStreamCallback(queue)
+            queue: asyncio.Queue[StreamEvent] = asyncio.Queue(
+                maxsize=self._callback_queue_max_events
+            )
+            callback = _QueueStreamCallback(queue, loop=asyncio.get_running_loop())
             answer_started_at = time.perf_counter()
             handle = await self._llm_service.start(
                 preparation.messages,
@@ -213,6 +223,7 @@ class StreamChatService:
                 top_p=preparation.prompt_plan.top_p,
                 deep_thinking=preparation.deep_thinking,
             )
+            callback.bind_handle(handle)
             if not self._task_manager.bind(task_id, handle):
                 # A cancellation can win the race between model start and handle binding.
                 yield _encode_event("cancel", await cancelled_payload())
@@ -220,6 +231,18 @@ class StreamChatService:
                 return
 
             while True:
+                if callback.overflowed:
+                    handle.cancel()
+                    self._chat_service.record_answer_failure(preparation, answer_started_at)
+                    yield _encode_event(
+                        "error",
+                        {
+                            "message": "AI stream output exceeded the delivery buffer.",
+                            "code": "stream_backpressure",
+                        },
+                    )
+                    yield _encode_event("done", {"taskId": task_id})
+                    return
                 if is_disconnected is not None and await is_disconnected():
                     await self._task_manager.cancel(task_id)
                     await cancelled_payload()
@@ -245,7 +268,12 @@ class StreamChatService:
                         yield _encode_event("cancel", await cancelled_payload())
                     else:
                         self._chat_service.record_answer_failure(preparation, answer_started_at)
-                        yield _encode_event("error", {"message": str(event.data["error"])})
+                        logger.warning(
+                            "stream model callback failed taskId=%s error=%s",
+                            task_id,
+                            event.data["error"],
+                        )
+                        yield _encode_event("error", {"message": "AI stream is unavailable"})
                     yield _encode_event("done", {"taskId": task_id})
                     return
                 if event.name == "complete":
@@ -284,7 +312,7 @@ class StreamChatService:
                 yield _encode_event("done", {"taskId": task_id})
                 return
             raise
-        except Exception as exc:
+        except Exception:
             logger.exception("stream chat failed taskId=%s", task_id)
             if self._task_manager.is_cancelled(task_id):
                 yield _encode_event("cancel", await cancelled_payload())
@@ -292,12 +320,12 @@ class StreamChatService:
                 self._chat_service.record_answer_failure(preparation, answer_started_at)
                 yield _encode_event(
                     "error",
-                    {"message": "AI stream is unavailable", "detail": str(exc)},
+                    {"message": "AI stream is unavailable"},
                 )
             else:
                 yield _encode_event(
                     "error",
-                    {"message": "AI stream preparation failed", "detail": str(exc)},
+                    {"message": "AI stream preparation failed"},
                 )
             yield _encode_event("done", {"taskId": task_id})
         finally:
@@ -312,9 +340,10 @@ class StreamChatService:
             await self._queue_limiter.release(queue_permit)
             await self._task_manager.finalize(task_id)
 
-    async def cancel(self, task_id: str) -> bool:
-        cancelled = await self._task_manager.cancel(task_id)
-        await self._queue_limiter.cancel(task_id)
+    async def cancel(self, task_id: str, *, owner_id: str | None = None) -> bool:
+        cancelled = await self._task_manager.cancel(task_id, owner_id=owner_id)
+        if cancelled:
+            await self._queue_limiter.cancel(task_id)
         return cancelled
 
     async def _record_queue_rejection(self, request: ChatRequest) -> dict[str, str | None]:
@@ -401,20 +430,55 @@ class _AsyncTaskCancellationHandle:
 
 
 class _QueueStreamCallback:
-    def __init__(self, queue: asyncio.Queue[StreamEvent]) -> None:
+    """Bridge model callbacks into a bounded asyncio queue.
+
+    Model implementations may invoke callbacks from a worker thread.  Scheduling onto the
+    request loop avoids touching ``asyncio.Queue`` cross-thread; a full queue immediately
+    cancels the upstream model instead of retaining an unbounded token backlog.
+    """
+
+    def __init__(
+        self, queue: asyncio.Queue[StreamEvent], *, loop: asyncio.AbstractEventLoop
+    ) -> None:
         self._queue = queue
+        self._loop = loop
+        self._handle: Any | None = None
+        self._overflowed = False
+
+    @property
+    def overflowed(self) -> bool:
+        return self._overflowed
+
+    def bind_handle(self, handle: Any) -> None:
+        self._handle = handle
+        if self._overflowed:
+            handle.cancel()
 
     def on_thinking(self, content: str) -> None:
-        self._queue.put_nowait(StreamEvent("thinking", {"delta": content}))
+        self._schedule(StreamEvent("thinking", {"delta": content}))
 
     def on_content(self, content: str) -> None:
-        self._queue.put_nowait(StreamEvent("content", {"delta": content}))
+        self._schedule(StreamEvent("content", {"delta": content}))
 
     def on_complete(self) -> None:
-        self._queue.put_nowait(StreamEvent("complete", {}))
+        self._schedule(StreamEvent("complete", {}))
 
     def on_error(self, error: Exception) -> None:
-        self._queue.put_nowait(StreamEvent("error", {"error": error}))
+        self._schedule(StreamEvent("error", {"error": error}))
+
+    def _schedule(self, event: StreamEvent) -> None:
+        if not self._overflowed:
+            self._loop.call_soon_threadsafe(self._push, event)
+
+    def _push(self, event: StreamEvent) -> None:
+        if self._overflowed:
+            return
+        if self._queue.full():
+            self._overflowed = True
+            if self._handle is not None:
+                self._handle.cancel()
+            return
+        self._queue.put_nowait(event)
 
 
 def _encode_event(name: str, data: dict[str, Any]) -> bytes:

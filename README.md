@@ -45,6 +45,7 @@ http://127.0.0.1:8000/ui/knowledge-upload.html
 
 ```http
 GET http://127.0.0.1:8000/health
+GET http://127.0.0.1:8000/ready
 ```
 
 运行测试：
@@ -102,6 +103,19 @@ At startup the client completes `initialize` and `tools/list`, then registers th
 tools. A connection/discovery failure is logged and does not prevent the Agent service from
 starting when `MCP_FAIL_FAST=false`; MCP intent execution is then rendered as unavailable rather
 than fabricated as real-time data.
+
+### Production request identity and stream delivery bounds
+
+For local development, request-body `userId` remains supported. In production, set
+`AGENT_REQUIRE_AUTHENTICATED_USER=true` behind a trusted gateway that injects
+`X-User-Id`. The service rejects a conflicting request-body `userId`, binds that identity to the
+stream task, and rejects cancellation requests from a different user.
+
+`STREAM_CALLBACK_QUEUE_MAX_EVENTS` bounds model callback buffering (default `256`). If a slow
+client cannot consume stream events quickly enough, the service cancels the model stream and
+emits a controlled `stream_backpressure` error rather than accumulating unbounded memory.
+Browser origins are configured with `AGENT_CORS_ALLOW_ORIGINS`; production should list only
+trusted origins.
 
 ### Distributed Stream Cancellation
 

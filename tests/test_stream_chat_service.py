@@ -410,6 +410,36 @@ async def test_stream_chat_emits_error_and_done_when_the_model_stream_fails() ->
     events = _parse_events(chunks)
 
     assert [name for name, _ in events] == ["meta", "meta", "meta", "error", "done"]
-    assert "provider failed" in events[3][1]["message"]
+    assert events[3][1]["message"] == "AI stream is unavailable"
     assert chat.failures == 1
     assert chat.completed == []
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_cancels_model_when_delivery_buffer_overflows() -> None:
+    chat = FakeChatService()
+    llm = FakeStreamLLMService([("content", str(index)) for index in range(6)])
+    service = StreamChatService(
+        chat_service=chat,
+        llm_service=llm,
+        task_manager=StreamTaskManager(),
+        callback_queue_max_events=2,
+    )
+
+    events = _parse_events(
+        [chunk async for chunk in service.stream(ChatRequest(message="hello"), task_id="task_full")]
+    )
+
+    assert [name for name, _ in events][-2:] == ["error", "done"]
+    assert events[-2][1]["code"] == "stream_backpressure"
+    assert llm.handle.cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_task_manager_rejects_cancel_from_another_owner() -> None:
+    manager = StreamTaskManager()
+    assert await manager.register("owned-task", owner_id="user-a") is True
+
+    assert await manager.cancel("owned-task", owner_id="user-b") is False
+    assert manager.is_cancelled("owned-task") is False
+    assert await manager.cancel("owned-task", owner_id="user-a") is True

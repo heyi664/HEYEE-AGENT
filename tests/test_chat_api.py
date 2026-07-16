@@ -72,3 +72,15 @@ def test_chat_stream_returns_sse_events() -> None:
     assert "event: finish" in body
     assert "event: done" in body
 
+
+def test_chat_rejects_body_identity_that_conflicts_with_gateway_identity() -> None:
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/v1/agent/chat",
+        json={"userId": 1, "message": "hello"},
+        headers={"X-User-Id": "2"},
+    )
+
+    assert response.status_code == 403
+

@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     agent_port: int = 8000
     agent_reload: bool = True
     agent_mock_mode: bool = True
+    # Production deployments should let the gateway authenticate the caller and inject
+    # X-User-Id.  Keeping this disabled preserves the standalone/local demo contract.
+    agent_require_authenticated_user: bool = False
+    stream_callback_queue_max_events: int = Field(default=256, ge=8, le=10000)
+    agent_cors_allow_origins: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:8000,http://127.0.0.1:8000"
+    )
 
     ai_provider: str = "openai"
     ai_api_key: str | None = None

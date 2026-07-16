@@ -6,6 +6,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Response, status
 from pydantic import BaseModel
 
+from agent_service.core.config import get_settings
 from agent_service.memory.conversation_memory_service import ConversationMemoryService
 
 router = APIRouter(tags=["conversation-memory"])
@@ -33,8 +34,16 @@ def resolve_request_user_id(
     userId: str = Query(..., min_length=1),
     authenticated_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ) -> str:
-    if authenticated_user_id is not None and authenticated_user_id != userId:
+    authenticated_user_id = (authenticated_user_id or "").strip()
+    if authenticated_user_id and authenticated_user_id != userId:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    if get_settings().agent_require_authenticated_user and not authenticated_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authenticated user identity",
+        )
+    if authenticated_user_id:
+        return authenticated_user_id
     return userId
 
 

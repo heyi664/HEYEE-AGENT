@@ -8,3 +8,7 @@ class HealthResponse(BaseModel):
     service: str
     version: str
 
+
+class ReadinessResponse(HealthResponse):
+    checks: dict[str, bool]
+

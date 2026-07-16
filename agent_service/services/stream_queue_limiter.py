@@ -81,6 +81,23 @@ redis.call('ZADD', permit_key, lease_until_ms, permit_id)
 return 1
 """
 
+    _ENQUEUE_SCRIPT = """
+local sequence_key = KEYS[1]
+local queue_key = KEYS[2]
+local entry_key = KEYS[3]
+local notify_channel = ARGV[1]
+local task_id = ARGV[2]
+local entry_ttl = tonumber(ARGV[3])
+
+if redis.call('SET', entry_key, '1', 'NX', 'EX', entry_ttl) == false then
+  return 0
+end
+local score = redis.call('INCR', sequence_key)
+redis.call('ZADD', queue_key, score, task_id)
+redis.call('PUBLISH', notify_channel, 'enqueue')
+return 1
+"""
+
     def __init__(
         self,
         *,
@@ -102,7 +119,10 @@ return 1
         self._client: Any | None = None
         self._pubsub: Any | None = None
         self._listener: asyncio.Task[None] | None = None
-        self._notification = asyncio.Event()
+        self._notification_tokens: asyncio.Queue[None] = asyncio.Queue(
+            maxsize=max_concurrent
+        )
+        self._claim_lock = asyncio.Lock()
         self._distributed = False
         self._unavailable = False
         self._running = False
@@ -116,6 +136,12 @@ return 1
     @property
     def lease_seconds(self) -> float:
         return self._lease_seconds
+
+    @property
+    def is_ready(self) -> bool:
+        """Whether configured admission control can currently accept stream work."""
+
+        return not self._enabled or not self._redis_url or self._distributed
 
     async def start(
         self,
@@ -137,7 +163,7 @@ return 1
         self._key_prefix = key_prefix.rstrip(":")
         self._unavailable = False
         self._closing = False
-        self._notification.clear()
+        self._notification_tokens = asyncio.Queue(maxsize=max_concurrent)
         if not enabled or not redis_url:
             return
         try:
@@ -145,8 +171,6 @@ return 1
 
             self._client = redis.Redis.from_url(redis_url, decode_responses=True)
             await self._client.ping()
-            self._pubsub = self._client.pubsub()
-            await self._pubsub.subscribe(self._notify_channel)
             self._running = True
             self._listener = asyncio.create_task(
                 self._listen_notifications(),
@@ -161,7 +185,7 @@ return 1
 
     async def close(self) -> None:
         self._closing = True
-        self._notification.set()
+        self._wake_waiters(self._max_concurrent)
         async with self._local_condition:
             # Active streams keep their local permit until their normal finally block releases
             # it.  Only wake queued requests so they can leave with UNAVAILABLE immediately.
@@ -318,10 +342,20 @@ return 1
         permit = StreamQueuePermit(task_id, uuid4().hex, True)
         self._distributed_waiting.add(task_id)
         try:
-            await client.set(self._entry_key(task_id), "1", ex=self._entry_ttl_seconds)
-            score = await client.incr(self._sequence_key)
-            await client.zadd(self._queue_key, {task_id: score})
-            await client.publish(self._notify_channel, "enqueue")
+            enqueued = await client.eval(
+                self._ENQUEUE_SCRIPT,
+                3,
+                self._sequence_key,
+                self._queue_key,
+                self._entry_key(task_id),
+                self._notify_channel,
+                task_id,
+                self._entry_ttl_seconds,
+            )
+            if int(enqueued or 0) != 1:
+                logger.warning("stream task registration already exists taskId=%s", task_id)
+                self._distributed_waiting.discard(task_id)
+                return QueueAcquireResult(QueueAcquireStatus.UNAVAILABLE)
         except Exception:
             logger.exception("failed to enqueue stream taskId=%s", task_id)
             self._distributed_waiting.discard(task_id)
@@ -345,30 +379,32 @@ return 1
                     await self._remove_distributed_waiter(task_id, notify=True)
                     return QueueAcquireResult(QueueAcquireStatus.TIMED_OUT)
                 try:
-                    claimed = await client.eval(
-                        self._CLAIM_SCRIPT,
-                        2,
-                        self._queue_key,
-                        self._permit_key,
-                        self._entry_prefix,
-                        task_id,
-                        permit.permit_id,
-                        self._max_concurrent,
-                        int(time.time() * 1000),
-                        self._lease_deadline_ms(),
-                        self._max_concurrent + 16,
-                    )
+                    # A local lock coalesces a burst of Pub/Sub wakeups. Cross-node FIFO
+                    # correctness still comes from the Redis Lua claim script.
+                    async with self._claim_lock:
+                        claimed = await client.eval(
+                            self._CLAIM_SCRIPT,
+                            2,
+                            self._queue_key,
+                            self._permit_key,
+                            self._entry_prefix,
+                            task_id,
+                            permit.permit_id,
+                            self._max_concurrent,
+                            int(time.time() * 1000),
+                            self._lease_deadline_ms(),
+                            self._max_concurrent + 16,
+                        )
                 except Exception:
                     logger.exception("failed to claim stream queue position taskId=%s", task_id)
                     await self._remove_distributed_waiter(task_id, notify=False)
                     return QueueAcquireResult(QueueAcquireStatus.UNAVAILABLE)
                 if int(claimed or 0) == 1:
                     return QueueAcquireResult(QueueAcquireStatus.GRANTED, permit)
-                self._notification.clear()
                 remaining = max(0.001, deadline - time.monotonic())
                 try:
                     await asyncio.wait_for(
-                        self._notification.wait(),
+                        self._notification_tokens.get(),
                         timeout=min(remaining, self._poll_interval_seconds),
                     )
                 except TimeoutError:
@@ -396,24 +432,55 @@ return 1
         self._local_waiting = deque(item for item in self._local_waiting if item.task_id != task_id)
 
     async def _listen_notifications(self) -> None:
-        pubsub = self._pubsub
-        if pubsub is None:
-            return
-        try:
-            while self._running:
-                message = await pubsub.get_message(
-                    ignore_subscribe_messages=True,
-                    timeout=max(1.0, self._poll_interval_seconds * 5),
-                )
-                if message and message.get("type") == "message":
-                    self._notification.set()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            if self._running:
-                self._unavailable = True
-                self._notification.set()
-                logger.exception("stream queue Redis subscriber stopped unexpectedly")
+        """Keep Pub/Sub as a low-latency wake-up hint; polling remains the safety net."""
+
+        retry_delay = 0.25
+        while self._running:
+            pubsub: Any | None = None
+            try:
+                client = self._client
+                if client is None:
+                    return
+                pubsub = client.pubsub()
+                self._pubsub = pubsub
+                await pubsub.subscribe(self._notify_channel)
+                retry_delay = 0.25
+                while self._running:
+                    message = await pubsub.get_message(
+                        ignore_subscribe_messages=True,
+                        timeout=max(1.0, self._poll_interval_seconds * 5),
+                    )
+                    if message and message.get("type") == "message":
+                        self._wake_waiters(self._max_concurrent)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self._running:
+                    logger.warning(
+                        "stream queue Redis subscriber disconnected; retrying in %.2fs",
+                        retry_delay,
+                        exc_info=True,
+                    )
+                    self._wake_waiters(self._max_concurrent)
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, 5.0)
+            finally:
+                if self._pubsub is pubsub:
+                    self._pubsub = None
+                if pubsub is not None:
+                    try:
+                        await pubsub.unsubscribe(self._notify_channel)
+                        await pubsub.aclose()
+                    except Exception:
+                        pass
+
+    def _wake_waiters(self, limit: int) -> None:
+        """Coalesce a broadcast into at most one immediate claim per available slot."""
+
+        for _ in range(max(1, limit)):
+            if self._notification_tokens.full():
+                return
+            self._notification_tokens.put_nowait(None)
 
     @property
     def _queue_key(self) -> str:

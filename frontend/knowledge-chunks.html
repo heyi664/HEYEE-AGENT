@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>文档分块浏览</title>
+  <link rel="stylesheet" href="./css/element.css">
+  <link rel="stylesheet" href="./css/main.css">
+  <link rel="stylesheet" href="./css/knowledge-upload.css?v=20260723">
+  <link rel="stylesheet" href="./css/knowledge-chunks.css?v=20260723">
+</head>
+<body>
+<div id="app">
+  <div class="kb-page">
+    <aside class="kb-sidebar">
+      <div class="brand-block"><div class="brand-mark">H</div><div><div class="brand-title">HYEEE AI</div><div class="brand-subtitle">知识库管理</div></div></div>
+      <button class="side-link" type="button" @click="goDocuments"><i class="el-icon-document"></i><span>文档管理</span></button>
+      <button class="side-link active" type="button"><i class="el-icon-collection"></i><span>文档分块</span></button>
+      <button class="side-link" type="button" @click="goUpload"><i class="el-icon-upload2"></i><span>上传文件</span></button>
+      <button class="side-link" type="button" @click="goChat"><i class="el-icon-chat-line-round"></i><span>返回聊天</span></button>
+    </aside>
+    <main class="kb-main">
+      <header class="kb-header">
+        <div><div class="header-title">文档分块浏览</div><div class="header-subtitle">选择已上传文档，查看文本提取后的全部分块内容</div></div>
+        <button class="submit-btn compact" type="button" :disabled="documentsLoading" @click="loadDocuments"><i class="el-icon-refresh"></i><span>{{ documentsLoading ? '刷新中' : '刷新文档' }}</span></button>
+      </header>
+      <section class="chunks-content">
+        <aside class="document-panel" v-loading="documentsLoading">
+          <div class="panel-title">上传文档</div>
+          <el-input v-model="keyword" clearable prefix-icon="el-icon-search" placeholder="搜索文档"></el-input>
+          <div class="document-list">
+            <button v-for="document in filteredDocuments" :key="document.id" class="document-item" :class="{ selected: selectedDocument && selectedDocument.id === document.id }" type="button" @click="selectDocument(document)">
+              <span class="document-name">{{ document.docName }}</span>
+              <span class="document-meta">{{ document.knowledgeBaseName || '未命名知识库' }} · {{ document.chunkCount || 0 }} 个分块</span>
+            </button>
+            <div v-if="!filteredDocuments.length && !documentsLoading" class="empty-tip">暂无文档</div>
+          </div>
+        </aside>
+        <section class="chunk-panel">
+          <template v-if="selectedDocument">
+            <div class="chunk-panel-head"><div><div class="panel-title">{{ selectedDocument.docName }}</div><div class="chunk-summary">{{ chunks.length }} 个分块 · {{ selectedDocument.chunkStrategy || '-' }}</div></div><el-input class="chunk-search" v-model="chunkKeyword" clearable prefix-icon="el-icon-search" placeholder="搜索分块内容"></el-input></div>
+            <div class="chunk-list" v-loading="chunksLoading">
+              <article v-for="chunk in filteredChunks" :key="chunk.id" class="chunk-card">
+                <div class="chunk-card-head"><span class="chunk-number">Chunk {{ chunk.chunkIndex + 1 }}</span><span>{{ chunk.charCount }} 字符 · 约 {{ chunk.tokenCount }} tokens</span></div>
+                <pre>{{ chunk.content }}</pre><div class="chunk-id">ID: {{ chunk.id }}</div>
+              </article>
+              <div v-if="!filteredChunks.length && !chunksLoading" class="empty-tip">没有可显示的分块</div>
+            </div>
+          </template>
+          <div v-else class="empty-state"><i class="el-icon-document"></i><span>请从左侧选择一个文档</span></div>
+        </section>
+      </section>
+    </main>
+  </div>
+</div>
+<script src="./js/vue.js"></script>
+<script src="./js/axios.min.js"></script>
+<script src="./js/element.js"></script>
+<script>
+  new Vue({
+    el: '#app',
+    data: { documents: [], chunks: [], selectedDocument: null, keyword: '', chunkKeyword: '', documentsLoading: false, chunksLoading: false },
+    created() { this.loadDocuments(); },
+    computed: {
+      filteredDocuments() {
+        const word = this.keyword.trim().toLowerCase();
+        return word ? this.documents.filter(item => [item.docName, item.knowledgeBaseName].filter(Boolean).some(value => String(value).toLowerCase().includes(word))) : this.documents;
+      },
+      filteredChunks() {
+        const word = this.chunkKeyword.trim().toLowerCase();
+        return word ? this.chunks.filter(item => item.content.toLowerCase().includes(word)) : this.chunks;
+      }
+    },
+    methods: {
+      loadDocuments() {
+        this.documentsLoading = true;
+        axios.get('/v1/knowledge-base/docs').then(({ data }) => {
+          this.documents = Array.isArray(data) ? data : [];
+          const documentId = new URLSearchParams(location.search).get('documentId') || (this.selectedDocument && this.selectedDocument.id);
+          const initial = this.documents.find(item => item.id === documentId) || this.documents[0];
+          if (initial) this.selectDocument(initial);
+        }).catch(err => this.$message.error(this.readError(err))).finally(() => { this.documentsLoading = false; });
+      },
+      selectDocument(document) {
+        if (this.selectedDocument && this.selectedDocument.id === document.id && this.chunks.length) return;
+        this.selectedDocument = document; this.chunks = []; this.chunkKeyword = ''; this.chunksLoading = true;
+        axios.get('/v1/knowledge-base/docs/' + encodeURIComponent(document.id) + '/chunks').then(({ data }) => {
+          this.chunks = Array.isArray(data) ? data : [];
+        }).catch(err => this.$message.error(this.readError(err))).finally(() => { this.chunksLoading = false; });
+      },
+      goDocuments() { location.href = '/ui/knowledge-documents.html'; },
+      goUpload() { location.href = '/ui/knowledge-upload.html'; },
+      goChat() { location.href = '/ui/chat.html'; },
+      readError(err) { return err && err.response && err.response.data && err.response.data.detail ? err.response.data.detail : '请求失败'; }
+    }
+  });
+</script>
+</body>
+</html>

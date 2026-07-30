@@ -9,6 +9,7 @@ from agent_service.schemas.knowledge import (
     KnowledgeBaseCreateRequest,
     KnowledgeBaseCreateResponse,
     KnowledgeBaseSummary,
+    KnowledgeDocumentChunkResponse,
     KnowledgeDocumentChunkStartResponse,
     KnowledgeDocumentChunkStatusResponse,
     KnowledgeDocumentEnableResponse,
@@ -74,6 +75,17 @@ def list_knowledge_documents(
     service: KnowledgeDocumentService = Depends(get_knowledge_document_service),
 ) -> list[KnowledgeDocumentListResponse]:
     return service.list_documents()
+
+
+@router.get(
+    "/knowledge-base/docs/{document_id}/chunks",
+    response_model=list[KnowledgeDocumentChunkResponse],
+)
+def list_knowledge_document_chunks(
+    document_id: str,
+    service: KnowledgeDocumentService = Depends(get_knowledge_document_service),
+) -> list[KnowledgeDocumentChunkResponse]:
+    return service.list_document_chunks(document_id)
 
 @router.delete(
     "/knowledge-base/docs/{document_id}",

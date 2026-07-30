@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from agent_service.core.config import get_settings
-from agent_service.core.observability import record_stage
+from agent_service.core.observability import pop_trace, push_trace, record_stage
 from agent_service.schemas.chat import ChatRequest
 from agent_service.services.chat_service import ChatPreparation, ChatService, get_chat_service
 from agent_service.services.stream_llm_service import StreamLLMService
@@ -62,6 +62,7 @@ class StreamChatService:
         is_disconnected: Callable[[], Awaitable[bool]] | None = None,
     ) -> AsyncIterator[bytes]:
         task_id = task_id or f"task_{uuid4().hex[:16]}"
+        trace_id = f"trace_{uuid4().hex[:16]}"
         owner_id = str(request.userId) if request.userId is not None else "0"
         registered = await self._task_manager.register(task_id, owner_id=owner_id)
         if not registered:
@@ -69,12 +70,16 @@ class StreamChatService:
             yield _encode_event("done", {"taskId": task_id})
             return
 
+        trace_binding = push_trace(trace_id, task_id=task_id)
+        stream_started_at = time.perf_counter()
+
         preparation: ChatPreparation | None = None
         answer_started_at: float | None = None
         response_parts: list[str] = []
         handle: Any | None = None
         queue_permit: StreamQueuePermit | None = None
         lease_task: asyncio.Task[None] | None = None
+        model_start_task: asyncio.Task[Any] | None = None
         cancellation_persisted = False
 
         async def cancelled_payload() -> dict[str, Any]:
@@ -121,7 +126,10 @@ class StreamChatService:
         try:
             # Send the task identifier before admission and slow RAG preparation so a user can
             # cancel whether the request is queued, rewriting or streaming an answer.
-            yield _encode_event("meta", {"taskId": task_id, "phase": "queued"})
+            yield _encode_event(
+                "meta",
+                {"taskId": task_id, "traceId": trace_id, "phase": "queued"},
+            )
             if self._task_manager.is_cancelled(task_id):
                 yield _encode_event("cancel", await cancelled_payload())
                 yield _encode_event("done", {"taskId": task_id})
@@ -216,13 +224,31 @@ class StreamChatService:
             )
             callback = _QueueStreamCallback(queue, loop=asyncio.get_running_loop())
             answer_started_at = time.perf_counter()
-            handle = await self._llm_service.start(
-                preparation.messages,
-                callback,
-                temperature=preparation.prompt_plan.temperature,
-                top_p=preparation.prompt_plan.top_p,
-                deep_thinking=preparation.deep_thinking,
+            # A model client returns its cancellation handle only after its stream setup.
+            # Bind the startup task first so cancellation can still interrupt a candidate
+            # while StreamLLMService is waiting for its first visible token.
+            model_start_task = asyncio.create_task(
+                self._llm_service.start(
+                    preparation.messages,
+                    callback,
+                    temperature=preparation.prompt_plan.temperature,
+                    top_p=preparation.prompt_plan.top_p,
+                    deep_thinking=preparation.deep_thinking,
+                ),
+                name=f"stream-model-start-{task_id}",
             )
+            if not self._task_manager.bind(
+                task_id, _AsyncTaskCancellationHandle(model_start_task)
+            ):
+                model_start_task.cancel()
+                try:
+                    await model_start_task
+                except asyncio.CancelledError:
+                    pass
+                yield _encode_event("cancel", await cancelled_payload())
+                yield _encode_event("done", {"taskId": task_id})
+                return
+            handle = await model_start_task
             callback.bind_handle(handle)
             if not self._task_manager.bind(task_id, handle):
                 # A cancellation can win the race between model start and handle binding.
@@ -329,6 +355,12 @@ class StreamChatService:
                 )
             yield _encode_event("done", {"taskId": task_id})
         finally:
+            if model_start_task is not None and not model_start_task.done():
+                model_start_task.cancel()
+                try:
+                    await model_start_task
+                except asyncio.CancelledError:
+                    pass
             if handle is not None and self._task_manager.is_cancelled(task_id):
                 handle.cancel()
             if lease_task is not None:
@@ -339,6 +371,12 @@ class StreamChatService:
                     pass
             await self._queue_limiter.release(queue_permit)
             await self._task_manager.finalize(task_id)
+            record_stage(
+                "stream_total",
+                elapsed_ms=int((time.perf_counter() - stream_started_at) * 1000),
+                status="finalized",
+            )
+            pop_trace(trace_binding)
 
     async def cancel(self, task_id: str, *, owner_id: str | None = None) -> bool:
         cancelled = await self._task_manager.cancel(task_id, owner_id=owner_id)
@@ -421,7 +459,7 @@ class StreamChatService:
 class _AsyncTaskCancellationHandle:
     """Adapts a pre-stream asyncio task to the same cancellation protocol as an LLM stream."""
 
-    def __init__(self, task: asyncio.Task[ChatPreparation]) -> None:
+    def __init__(self, task: asyncio.Task[Any]) -> None:
         self._task = task
 
     def cancel(self) -> None:

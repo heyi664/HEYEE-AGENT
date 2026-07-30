@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     ai_base_url: str = "https://api.openai.com/v1"
     ai_model: str = "gpt-4o-mini"
     ai_timeout_seconds: float = Field(default=25.0, gt=0)
+    # A stream that has not produced any visible token can safely switch to the next
+    # configured candidate.  Once a token has been emitted, fail instead of mixing
+    # responses from two models.
+    ai_stream_first_token_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     ai_models_json: str | None = None
     ai_circuit_failure_threshold: int = Field(default=3, ge=1)
     ai_circuit_open_seconds: float = Field(default=60.0, gt=0)

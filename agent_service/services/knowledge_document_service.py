@@ -27,6 +27,7 @@ from agent_service.schemas.knowledge import (
     ALLOWED_CHUNK_STRATEGIES,
     KnowledgeBaseCreateResponse,
     KnowledgeBaseSummary,
+    KnowledgeDocumentChunkResponse,
     KnowledgeDocumentChunkStartResponse,
     KnowledgeDocumentChunkStatusResponse,
     KnowledgeDocumentEnableResponse,
@@ -87,6 +88,22 @@ class KnowledgeDocumentService:
 
     def list_knowledge_bases(self) -> list[KnowledgeBaseSummary]:
         return self.repository.list_knowledge_bases()
+
+    def list_document_chunks(self, document_id: str) -> list[KnowledgeDocumentChunkResponse]:
+        document = self._get_document_or_404(document_id)
+        return [
+            KnowledgeDocumentChunkResponse(
+                id=chunk.chunk_id,
+                knowledgeBaseId=chunk.kb_id,
+                documentId=chunk.doc_id,
+                chunkIndex=chunk.chunk_index,
+                content=chunk.content,
+                contentHash=chunk.content_hash,
+                charCount=chunk.char_count,
+                tokenCount=chunk.token_count,
+            )
+            for chunk in self.repository.list_vector_chunk_sources(document.id)
+        ]
 
 
     def create_knowledge_base(

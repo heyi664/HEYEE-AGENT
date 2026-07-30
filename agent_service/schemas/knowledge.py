@@ -131,6 +131,17 @@ class KnowledgeDocumentListResponse(BaseModel):
     updateTime: str | None = None
 
 
+class KnowledgeDocumentChunkResponse(BaseModel):
+    id: str
+    knowledgeBaseId: str
+    documentId: str
+    chunkIndex: int
+    content: str
+    contentHash: str
+    charCount: int
+    tokenCount: int
+
+
 class KnowledgeDocumentUpdateRequest(BaseModel):
     docName: str = Field(min_length=1, max_length=255)
     chunkStrategy: str = Field(min_length=1)

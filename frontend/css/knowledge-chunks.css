@@ -1,0 +1,24 @@
+.chunks-content { min-height: 0; flex: 1 1 auto; display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; padding: 22px; overflow: hidden; box-sizing: border-box; }
+.document-panel, .chunk-panel { min-height: 0; border: 1px solid #e8ebf0; border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(22, 29, 43, .05); padding: 18px; box-sizing: border-box; }
+.document-panel { display: flex; flex-direction: column; gap: 14px; }
+.chunk-panel { display: flex; flex-direction: column; overflow: hidden; }
+.panel-title { color: #202124; font-size: 16px; font-weight: 700; }
+.document-list, .chunk-list { min-height: 0; overflow: auto; }
+.document-list { display: flex; flex-direction: column; gap: 8px; }
+.document-item { border: 1px solid #edf0f4; border-radius: 6px; background: #fff; padding: 12px; text-align: left; color: #30343b; }
+.document-item:hover, .document-item.selected { border-color: #ff6633; background: #fff5f0; }
+.document-name, .document-meta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.document-name { font-size: 14px; font-weight: 600; }
+.document-meta, .chunk-summary, .chunk-id { margin-top: 5px; color: #7b8491; font-size: 12px; }
+.chunk-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
+.chunk-search { flex: 0 0 280px; width: 280px; }
+.chunk-list { padding-right: 4px; }
+.chunk-card { border: 1px solid #e8ebf0; border-radius: 7px; margin-bottom: 12px; overflow: hidden; }
+.chunk-card-head { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; color: #6d7683; background: #f8f9fb; font-size: 12px; }
+.chunk-number { color: #ff6633; font-weight: 700; }
+.chunk-card pre { margin: 0; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; color: #30343b; font: 13px/1.7 Consolas, "Microsoft YaHei", sans-serif; }
+.chunk-id { padding: 0 14px 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty-state, .empty-tip { color: #9098a4; text-align: center; }
+.empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+.empty-state i { font-size: 42px; }
+.empty-tip { padding: 28px 8px; }

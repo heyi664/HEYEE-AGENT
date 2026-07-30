@@ -257,6 +257,30 @@ def test_list_documents_returns_repository_records() -> None:
     assert result[0].chunkConfig == {"targetChars": 1400}
 
 
+def test_list_document_chunks_returns_document_chunks() -> None:
+    repository = FakeDocumentManagementRepository(_document())
+    repository.chunk_sources = [
+        KnowledgeVectorChunkSource(
+            chunk_id="chunk-1",
+            kb_id="kb-1",
+            doc_id="doc-1",
+            chunk_index=0,
+            content="first chunk",
+            content_hash="hash-1",
+            char_count=11,
+            token_count=2,
+        )
+    ]
+    service = KnowledgeDocumentService(repository=repository, storage=FakeStorage())
+
+    result = service.list_document_chunks("doc-1")
+
+    assert result[0].id == "chunk-1"
+    assert result[0].documentId == "doc-1"
+    assert result[0].content == "first chunk"
+    assert repository.listed_doc_ids == ["doc-1"]
+
+
 def test_knowledge_document_management_page_is_served() -> None:
     client = TestClient(create_app())
 
@@ -270,3 +294,13 @@ def test_knowledge_document_management_page_is_served() -> None:
     assert "enableDocument" in response.text
     assert ":disabled=\"scope.row.enabled === false" in response.text
     assert ":disabled=\"scope.row.enabled === true" in response.text
+
+
+def test_knowledge_chunks_page_is_served() -> None:
+    client = TestClient(create_app())
+
+    response = client.get("/ui/knowledge-chunks.html")
+
+    assert response.status_code == 200
+    assert "/v1/knowledge-base/docs" in response.text
+    assert "selectDocument" in response.text

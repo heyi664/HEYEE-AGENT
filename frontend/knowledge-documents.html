@@ -104,6 +104,7 @@
             <el-table-column label="操作" width="310" fixed="right">
               <template slot-scope="scope">
                 <div class="row-actions">
+                  <el-button size="mini" type="info" plain @click="viewChunks(scope.row)">查看分块</el-button>
                   <el-button size="mini" type="danger" plain @click="deleteDocument(scope.row)">删除</el-button>
                   <el-button size="mini" type="primary" plain @click="openUpdateDialog(scope.row)">更新</el-button>
                   <el-button
@@ -206,6 +207,9 @@
         }).finally(() => {
           this.loading = false;
         });
+      },
+      viewChunks(row) {
+        location.href = "/ui/knowledge-chunks.html?documentId=" + encodeURIComponent(row.id);
       },
       deleteDocument(row) {
         this.$confirm("确认删除文档「" + row.docName + "」？", "删除文档", { type: "warning" }).then(() => {

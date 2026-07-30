@@ -224,7 +224,9 @@ async def test_stream_chat_emits_meta_deltas_finish_and_done() -> None:
         "finish",
         "done",
     ]
-    assert events[0][1] == {"taskId": "task_1", "phase": "queued"}
+    assert events[0][1]["taskId"] == "task_1"
+    assert events[0][1]["phase"] == "queued"
+    assert events[0][1]["traceId"].startswith("trace_")
     assert events[1][1] == {"taskId": "task_1", "phase": "preparing"}
     assert events[2][1]["conversationId"] == "conv_stream"
     assert events[3][1] == {"type": "think", "delta": "analyzing"}
